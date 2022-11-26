@@ -179,6 +179,7 @@ def train(env_id, algo, num_timesteps, seed, sgd_steps, t_pi, t_c, lam, log, exp
                 model.pretrain(dataset, n_epochs=pretrain_epochs)
 
             model.learn(total_timesteps=num_timesteps, tb_log_name=log_name)
+            model.save(algo + '_' + env_name + '_' + str(num_timesteps))
 
 
         env.close()
