@@ -1233,3 +1233,115 @@ class NeuralAdversaryMD(object):
         feed_dict = {self.policy_obs_ph: obs, self.policy_acs_ph: actions}
         reward = self.sess.run(self.reward_op, feed_dict)
         return reward
+
+
+class LinearReward(object):
+    def __init__(self, sess, observation_space, action_space, scope="adversary", is_action_features=True):
+        """
+        Reward regression from observations and transitions
+
+        :param observation_space: (gym.spaces)
+        :param action_space: (gym.spaces)
+        :param hidden_size: ([int]) the hidden dimension for the MLP
+        :param entcoeff: (float) the entropy loss weight
+        :param scope: (str) tensorflow variable scope
+        :param normalize: (bool) Whether to normalize the reward or not
+        """
+        # TODO: support images properly (using a CNN)
+        self.scope = scope
+        self.sess = sess
+        self.observation_shape = observation_space.shape
+        self.actions_shape = action_space.shape
+        self.is_action_features = is_action_features
+
+        if isinstance(action_space, gym.spaces.Box):
+            # Continuous action space
+            self.discrete_actions = False
+            self.n_actions = action_space.shape[0]
+        elif isinstance(action_space, gym.spaces.Discrete):
+            self.n_actions = action_space.n
+            self.discrete_actions = True
+        else:
+            raise ValueError('Action space not supported: {}'.format(action_space))
+
+        if self.is_action_features:
+            self.n_features = self.observation_shape[0] + self.n_actions
+        else:
+            self.n_features = self.observation_shape[0]
+        """
+        expert_features = expert_features[:self.n_features]
+
+
+        self.hidden_size = hidden_size
+        self.normalize = normalize
+        self.obs_rms = None
+
+        self.expert_features = tf.constant(expert_features, dtype=tf.float32)
+        self.norm_factor = tf.sqrt(float(self.n_features))
+
+
+        # self.normalization = tf.square(float(np.linalg.norm(expert_features)))
+        self.normalization = np.linalg.norm(expert_features)
+
+        expert_normalization = np.linalg.norm(expert_features)
+
+
+        # if expert_normalization > 1:
+        # self.reward_vec = tf.Variable(expert_features / (self.norm_factor * expert_normalization), dtype=tf.float32)
+        self.reward_vec = tf.Variable(expert_features, dtype=tf.float32)
+
+        # else:
+        #     self.reward_vec = tf.Variable(expert_features / self.norm_factor)
+            # self.reward_vec = tf.Variable(expert_features, dtype=tf.float32)
+
+        # self.reward_vec = tf.Variable(expert_features / self.normalization, dtype=tf.float32)
+
+        # if normalization > 1:
+        #     self.reward_vec = tf.Variable(expert_features / normalization, dtype=tf.float32)
+        # else:
+        #     self.reward_vec = tf.Variable(expert_features, dtype=tf.float32)
+        #
+
+        self.exploration_bonus = exploration_bonus
+        self.t_c = t_c
+
+        self.bonus_coef = bonus_coef
+        if self.exploration_bonus:
+            self.covariance_lambda = tf.Variable(tf.eye(self.n_features), dtype=tf.float32)
+            self.inverse_covariance = tf.eye(self.n_features)
+        else:
+            self.covariance_lambda = None
+            self.inverse_covariance = None
+        """
+        # Placeholders
+        self.reward_vec = np.zeros((self.n_features, ), dtype=np.float32)
+        # self.normalize_s = np.array([1./2., 1./2., 1./16., 1./2.], dtype=np.float32) # MLP output action is in [-1, 1]
+        assert not is_action_features
+        self.normalize_s = np.array([1./2., 1./2., 1./16.], dtype=np.float32)
+
+    def update_reward(self, new_reward_vec):
+        self.reward_vec = new_reward_vec
+
+    def get_reward(self, obs, action=None):
+        """
+        Predict the reward using the observation and action
+
+        :param obs: (tf.Tensor or np.ndarray) the observation
+        :param actions: (tf.Tensor or np.ndarray) the action
+        :return: (np.ndarray) the reward
+        """
+        # sess = tf.get_default_session()
+        if len(obs.shape) == 1:
+            obs = np.expand_dims(obs, 0)
+        if len(action.shape) == 1:
+            action = np.expand_dims(action, 0)
+
+        if self.is_action_features:
+            features = np.concatenate((obs, action), axis=1)
+        else:
+            features = obs
+
+        features = features * self.normalize_s[None] + 0.5
+        reward = np.squeeze(np.matmul(features, self.reward_vec[..., None]))
+
+        return reward
