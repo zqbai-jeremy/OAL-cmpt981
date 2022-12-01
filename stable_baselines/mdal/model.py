@@ -508,3 +508,292 @@ class Proj(object):
 
     def save(self, save_path):
         pass
+
+
+class MWAL_MDPO_OFF(MDPO_OFF):
+    """
+    Generative Adversarial Imitation Learning (GAIL)
+
+    .. warning::
+
+        Images are not yet handled properly by the current implementation
+
+
+    :param policy: (ActorCriticPolicy or str) The policy model to use (MlpPolicy, CnnPolicy, CnnLstmPolicy, ...)
+    :param env: (Gym environment or str) The environment to learn from (if registered in Gym, can be str)
+    :param expert_dataset: (ExpertDataset) the dataset manager
+    :param gamma: (float) the discount value
+    :param timesteps_per_batch: (int) the number of timesteps to run per batch (horizon)
+    :param max_kl: (float) the Kullback-Leibler loss threshold
+    :param cg_iters: (int) the number of iterations for the conjugate gradient calculation
+    :param lam: (float) GAE factor
+    :param entcoeff: (float) the weight for the entropy loss
+    :param cg_damping: (float) the compute gradient dampening factor
+    :param vf_stepsize: (float) the value function stepsize
+    :param vf_iters: (int) the value function's number iterations for learning
+    :param hidden_size: ([int]) the hidden dimension for the MLP
+    :param g_step: (int) number of steps to train policy in each epoch
+    :param d_step: (int) number of steps to train discriminator in each epoch
+    :param d_stepsize: (float) the reward giver stepsize
+    :param verbose: (int) the verbosity level: 0 none, 1 training information, 2 tensorflow debug
+    :param _init_setup_model: (bool) Whether or not to build the network at the creation of the instance
+    :param full_tensorboard_log: (bool) enable additional logging when using tensorboard
+        WARNING: this logging can take a lot of space quickly
+    """
+
+    # def __init__(self, policy, env, expert_dataset=None,
+    #              hidden_size_adversary=100, adversary_entcoeff=1e-3, timesteps_per_batch=2000,
+    #              g_step=5, d_step=1, d_stepsize=3e-4, verbose=0,
+    #              _init_setup_model=True, **kwargs):
+
+    def __init__(self, policy, env, expert_dataset=None,
+                 hidden_size_adversary=100, adversary_entcoeff=0, timesteps_per_batch=2000,
+                 g_step=1, d_step=10, d_stepsize=3e-4, verbose=0,
+                 _init_setup_model=True, exploration_bonus=False, bonus_coef=0.01, is_action_features=True,
+                  neural=False, lipschitz=1.0, **kwargs):
+        super().__init__(policy, env, verbose=verbose, _init_setup_model=False, **kwargs)
+        self.observation_space = env.observation_space
+        self.action_space = env.action_space
+        self.using_gail = False
+        self.using_mdal = False
+        self.using_proj = False
+        self.using_mwal = True
+        self.expert_dataset = expert_dataset
+        self.g_step = g_step
+        self.d_step = d_step
+        self.d_stepsize = d_stepsize
+        self.hidden_size_adversary = hidden_size_adversary
+        self.timesteps_per_batch = timesteps_per_batch
+        self.adversary_entcoeff = adversary_entcoeff
+        self.exploration_bonus = exploration_bonus
+        self.bonus_coef = bonus_coef
+        self.is_action_features = is_action_features
+        self.neural = neural
+        self.lipschitz = lipschitz
+        if _init_setup_model:
+            self.setup_model()
+
+    def learn(self, total_timesteps, callback=None, log_interval=2000, tb_log_name="MWAL_MDPO_OFF",
+              reset_num_timesteps=True):
+        assert self.expert_dataset is not None, "You must pass an expert dataset to MWAL_MDPO_OFF for training"
+        return super().learn(total_timesteps, callback, log_interval, tb_log_name, reset_num_timesteps)
+
+
+class MWAL(object):
+    def __init__(self, policy, env, expert_dataset=None,
+                 hidden_size_adversary=100, adversary_entcoeff=0, timesteps_per_batch=2000,
+                 g_step=1, d_step=10, d_stepsize=3e-4, verbose=0,
+                 _init_setup_model=True, exploration_bonus=False, bonus_coef=0.01, is_action_features=True,
+                  neural=False, lipschitz=1.0, **kwargs):
+        self.kwargs = {
+            'policy': policy,
+            'env': env,
+            'expert_dataset': expert_dataset,
+            'hidden_size_adversary': hidden_size_adversary,
+            'adversary_entcoeff': adversary_entcoeff,
+            'timesteps_per_batch': timesteps_per_batch,
+            'g_step': g_step,
+            'd_step': d_step,
+            'd_stepsize': d_stepsize,
+            'verbose': verbose,
+            '_init_setup_model': _init_setup_model,
+            'exploration_bonus': exploration_bonus,
+            'bonus_coef': bonus_coef,
+            'is_action_features': is_action_features,
+            'neural': neural,
+            'lipschitz': lipschitz,
+        }
+        self.kwargs.update(kwargs)
+
+        self.expert_dataset = expert_dataset
+        # self.normalize_s = np.array([1./2., 1./2., 1./16., 1./4.], dtype=np.float32)
+        assert not is_action_features
+        if env.envs[0].spec.id == 'Pendulum-v0':
+            self.normalize_s = np.array([1./2., 1./2., 1./16.], dtype=np.float32)
+            self.normalize_b = np.array([0.5, 0.5, 0.5], dtype=np.float32)
+        elif env.envs[0].spec.id == 'MountainCarContinuous-v0':
+            self.normalize_s = np.array([1/1.8, 1/0.14], dtype=np.float32)
+            self.normalize_b = np.array([2./3., 0.5], dtype=np.float32)
+        expert_feat_exp = self.expert_dataset.successor_features * 100 # gamma has to be 0.99. successor_features has extra * (1 - gamma)
+        self.expert_feat_exp = expert_feat_exp[:-1] * self.normalize_s + self.normalize_b
+        self.model = None
+        self.alpha = None
+        self.logdir = kwargs['tensorboard_log']
+        if not os.path.exists(kwargs['tensorboard_log']):
+            os.makedirs(kwargs['tensorboard_log'])
+
+    def get_feature_expectation_raw(self, model, env, n_episodes=10):
+        # Retrieve the environment using the RL model
+        if env is None and isinstance(model, BaseRLModel):
+            env = model.get_env()
+
+        assert env is not None, "You must set the env in the model or pass it to the function."
+
+        is_vec_env = False
+        if isinstance(env, VecEnv) and not isinstance(env, _UnvecWrapper):
+            is_vec_env = True
+            if env.num_envs > 1:
+                warnings.warn("You are using multiple envs, only the data from the first one will be recorded.")
+
+        # Sanity check
+        assert (isinstance(env.observation_space, spaces.Box) or
+                isinstance(env.observation_space, spaces.Discrete)), "Observation space type not supported"
+
+        assert (isinstance(env.action_space, spaces.Box) or
+                isinstance(env.action_space, spaces.Discrete)), "Action space type not supported"
+
+        actions = []
+        observations = []
+        rewards = []
+        episode_returns = np.zeros((n_episodes,))
+
+        episode_starts = []
+        gamma = model.gamma
+
+        ep_idx = 0
+        h_step = 0
+        obs = env.reset()
+        episode_obs = []
+        episode_obs.append([])
+        episode_gammas = []
+        episode_gammas.append([])
+        episode_act = []
+        episode_act.append([])
+        episode_starts.append(True)
+        reward_sum = 0.0
+        idx = 0
+        # state and mask for recurrent policies
+        state, mask = None, None
+
+        if is_vec_env:
+            mask = [True for _ in range(env.num_envs)]
+
+        while ep_idx < n_episodes:
+            obs_ = obs[0] if is_vec_env else obs
+            observations.append(obs_)
+            episode_obs[ep_idx].append(obs_)
+
+            if isinstance(model, BaseRLModel):
+                action, state = model.predict(obs, state=state, mask=mask)
+            else:
+                action = model(obs)
+
+            obs, reward, done, _ = env.step(action)
+
+            # Use only first env
+            if is_vec_env:
+                mask = [done[0] for _ in range(env.num_envs)]
+                action = np.array([action[0]])
+                reward = np.array([reward[0]])
+                done = np.array([done[0]])
+
+            actions.append(action)
+            episode_gammas[ep_idx].append(gamma ** h_step)
+            episode_act[ep_idx].append(action)
+            rewards.append(reward)
+            episode_starts.append(done)
+            reward_sum += reward
+            idx += 1
+            h_step += 1
+            if done:
+                if not is_vec_env:
+                    obs = env.reset()
+                    # Reset the state in case of a recurrent policy
+                    state = None
+                episode_returns[ep_idx] = reward_sum
+                reward_sum = 0.0
+                h_step = 0
+                ep_idx += 1
+                if ep_idx < n_episodes:
+                    episode_obs.append([])
+                    episode_act.append([])
+                    episode_gammas.append([])
+
+
+
+        if isinstance(env.observation_space, spaces.Box):
+            observations = np.concatenate(observations).reshape((-1,) + env.observation_space.shape)
+        elif isinstance(env.observation_space, spaces.Discrete):
+            observations = np.array(observations).reshape((-1, 1))
+
+        if isinstance(env.action_space, spaces.Box):
+            actions = np.concatenate(actions).reshape((-1,) + env.action_space.shape)
+        elif isinstance(env.action_space, spaces.Discrete):
+            actions = np.array(actions).reshape((-1, 1))
+
+
+
+        for ep_idx, (ep_obs, ep_act), in enumerate(zip(episode_obs, episode_act)):
+            for idx, (obs, act) in enumerate(zip(reversed(ep_obs), reversed(ep_act))):
+                current_features = np.concatenate((obs, act), axis=0)
+                if idx == 0:
+                    successor_features = (1-gamma) * current_features
+                else:
+                    successor_features = np.add(gamma * successor_features, (1 - gamma) * current_features)
+            if ep_idx == 0:
+                sum_successor_features = successor_features
+            else:
+                sum_successor_features = np.add(sum_successor_features, successor_features)
+
+        successor_features = sum_successor_features / n_episodes
+
+        rewards = np.array(rewards)
+        episode_starts = np.array(episode_starts[:-1])
+
+        assert len(observations) == len(actions)
+
+        return successor_features
+
+    def get_feature_expectation(self, model, env, n_episodes=10):
+        feat_exp = self.get_feature_expectation_raw(model, env.envs[0].env, n_episodes)
+        feat_exp = feat_exp * 100 # gamma has to be 0.99. successor_features has extra * (1 - gamma)
+        feat_exp = feat_exp[:-1] * self.normalize_s + self.normalize_b
+        return feat_exp
+
+    def learn(self, total_timesteps, T=10, callback=None, log_interval=2000, tb_log_name="MWAL_MDPO_OFF",
+              reset_num_timesteps=True):
+        assert self.expert_dataset is not None, "You must pass an expert dataset to MWAL_MDPO_OFF for training"
+
+        feat_exps_bar = []
+        feat_exps = []
+        
+        ts = []
+        reward_vecs = []
+        env = self.kwargs['env']
+
+        # Initialize
+        # kwargs = copy.deepcopy(self.kwargs)
+        # kwargs['tensorboard_log'] = os.path.join(kwargs['tensorboard_log'], 'iter%04d' % 0)
+        model = MWAL_MDPO_OFF(**self.kwargs)
+        feat_exp = self.get_feature_expectation(model, env, 100)
+        W = np.ones(np.shape(feat_exp))
+        model.save(os.path.join(self.logdir, 'iter%04d' % 0))
+        del model
+        feat_exps.append(feat_exp)
+
+        for i in range(1, T + 1):
+            print('mwal iter:', i)
+            # kwargs = copy.deepcopy(self.kwargs)
+            # kwargs['tensorboard_log'] = os.path.join(kwargs['tensorboard_log'], 'iter%04d' % i)
+            model = MWAL_MDPO_OFF(**self.kwargs)
+            reward_vec = W / np.sum(W)
+            reward_vecs.append(reward_vec)
+            model.reward_giver.update_reward(reward_vec)
+            model.learn(total_timesteps // T, tb_log_name='iter%04d' % i)
+            feat_exp = self.get_feature_expectation(model, env, 100)
+            model.save(os.path.join(self.logdir, 'iter%04d' % i))
+            del model
+            feat_exps.append(feat_exp)
+            beta = 1 / (1 + np.sqrt(2 * np.log(np.shape(W)) / T))
+            for j in range(len(W)):
+                G_j = ((1 - model.gamma)(feat_exp[j] - self.expert_feat_exp) + 2) / 4
+                W[j] = W[j] * np.exp(np.log(beta) * G_j)
+
+        policy_weights = np.ones(T) / T
+
+        with open(os.path.join(self.logdir, 'data.pkl'), 'wb') as f:
+            pickle.dump({'feat_exps_bar': feat_exps, 'policy_weights': policy_weights, 'feat_exps': feat_exps}, f)
+
+    def save(self, save_path):
+        pass
+

@@ -219,7 +219,7 @@ class MDPO_OFF(OffPolicyRLModel):
                                                                  bonus_coef=self.bonus_coef,
                                                                  t_c=self.t_c,
                                                                  is_action_features=self.is_action_features)
-                elif self.using_proj:
+                elif self.using_proj or self.using_mwal:
                     self.reward_giver = LinearReward(self.env, self.sess, self.observation_space, self.action_space,
                                                      is_action_features=self.is_action_features)
 
@@ -473,7 +473,7 @@ class MDPO_OFF(OffPolicyRLModel):
         batch = self.replay_buffer.sample(self.batch_size, env=self._vec_normalize_env)
         batch_obs, batch_actions, batch_rewards, batch_next_obs, batch_dones, batch_terminals = batch
 
-        if self.using_mdal or self.using_gail or self.using_proj:
+        if self.using_mdal or self.using_gail or self.using_proj or self.using_mwal:
             batch_rewards = self.reward_giver.get_reward(batch_obs, batch_actions)
 
         feed_dict = {
@@ -525,7 +525,7 @@ class MDPO_OFF(OffPolicyRLModel):
             start_time = time.time()
             episode_rewards = [0.0]
             episode_true_rewards = [0.0]
-            if self.using_mdal or self.using_gail or self.using_proj:
+            if self.using_mdal or self.using_gail or self.using_proj or self.using_mwal:
                 self._initialize_dataloader()
                 true_reward_buffer = deque(maxlen=40)
                 rewards_grad_norm_buffer = deque(maxlen=1)
@@ -579,7 +579,7 @@ class MDPO_OFF(OffPolicyRLModel):
                     unscaled_action = unscale_action(self.action_space, action)
                     assert action.shape == self.env.action_space.shape
 
-                if self.using_mdal or self.using_gail or self.using_proj:
+                if self.using_mdal or self.using_gail or self.using_proj or self.using_mwal:
                     # reward = reward_giver.get_reward(observation, (step+1) * covariance_lambda)
                     # covariance_lambda = (step+1) / (step + 2) * covariance_lambda \
                     #                     + np.matmul(np.expand_dims(observation, axis=1), np.expand_dims(observation, axis=0))\
