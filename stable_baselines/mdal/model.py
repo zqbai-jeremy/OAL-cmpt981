@@ -315,9 +315,14 @@ class Proj(object):
         self.expert_dataset = expert_dataset
         # self.normalize_s = np.array([1./2., 1./2., 1./16., 1./4.], dtype=np.float32)
         assert not is_action_features
-        self.normalize_s = np.array([1./2., 1./2., 1./16.], dtype=np.float32)
+        if env.envs[0].spec.id == 'Pendulum-v0':
+            self.normalize_s = np.array([1./2., 1./2., 1./16.], dtype=np.float32)
+            self.normalize_b = np.array([0.5, 0.5, 0.5], dtype=np.float32)
+        elif env.envs[0].spec.id == 'MountainCarContinuous-v0':
+            self.normalize_s = np.array([1/1.8, 1/0.14], dtype=np.float32)
+            self.normalize_b = np.array([2./3., 0.5], dtype=np.float32)
         expert_feat_exp = self.expert_dataset.successor_features * 100 # gamma has to be 0.99. successor_features has extra * (1 - gamma)
-        self.expert_feat_exp = expert_feat_exp[:-1] * self.normalize_s + 0.5
+        self.expert_feat_exp = expert_feat_exp[:-1] * self.normalize_s + self.normalize_b
         self.model = None
         self.alpha = None
         self.logdir = kwargs['tensorboard_log']
@@ -427,7 +432,7 @@ class Proj(object):
 
         for ep_idx, (ep_obs, ep_act), in enumerate(zip(episode_obs, episode_act)):
             for idx, (obs, act) in enumerate(zip(reversed(ep_obs), reversed(ep_act))):
-                current_features = np.concatenate((obs, act[0]), axis=0)
+                current_features = np.concatenate((obs, act), axis=0)
                 if idx == 0:
                     successor_features = (1-gamma) * current_features
                 else:
@@ -447,12 +452,12 @@ class Proj(object):
         return successor_features
 
     def get_feature_expectation(self, model, env, n_episodes=10):
-        feat_exp = self.get_feature_expectation_raw(model, env, n_episodes)
+        feat_exp = self.get_feature_expectation_raw(model, env.envs[0].env, n_episodes)
         feat_exp = feat_exp * 100 # gamma has to be 0.99. successor_features has extra * (1 - gamma)
-        feat_exp = feat_exp[:-1] * self.normalize_s + 0.5
+        feat_exp = feat_exp[:-1] * self.normalize_s + self.normalize_b
         return feat_exp
 
-    def learn(self, total_timesteps, num_proj_iters=1, callback=None, log_interval=2000, tb_log_name="Proj_MDPO_OFF",
+    def learn(self, total_timesteps, num_proj_iters=10, callback=None, log_interval=2000, tb_log_name="Proj_MDPO_OFF",
               reset_num_timesteps=True):
         assert self.expert_dataset is not None, "You must pass an expert dataset to Proj_MDPO_OFF for training"
 

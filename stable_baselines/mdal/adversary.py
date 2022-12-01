@@ -1236,7 +1236,7 @@ class NeuralAdversaryMD(object):
 
 
 class LinearReward(object):
-    def __init__(self, sess, observation_space, action_space, scope="adversary", is_action_features=True):
+    def __init__(self, env, sess, observation_space, action_space, scope="adversary", is_action_features=True):
         """
         Reward regression from observations and transitions
 
@@ -1317,10 +1317,18 @@ class LinearReward(object):
         self.reward_vec = np.zeros((self.n_features, ), dtype=np.float32)
         # self.normalize_s = np.array([1./2., 1./2., 1./16., 1./2.], dtype=np.float32) # MLP output action is in [-1, 1]
         assert not is_action_features
-        self.normalize_s = np.array([1./2., 1./2., 1./16.], dtype=np.float32)
+        if env.envs[0].spec.id == 'Pendulum-v0':
+            self.normalize_s = np.array([1./2., 1./2., 1./16.], dtype=np.float32)
+            self.normalize_b = np.array([0.5, 0.5, 0.5], dtype=np.float32)
+        elif env.envs[0].spec.id == 'MountainCarContinuous-v0':
+            self.normalize_s = np.array([1/1.8, 1/0.14], dtype=np.float32)
+            self.normalize_b = np.array([2./3., 0.5], dtype=np.float32)
 
     def update_reward(self, new_reward_vec):
+        new_reward_vec = new_reward_vec / np.linalg.norm(new_reward_vec)
         self.reward_vec = new_reward_vec
+
+        # print('reward w:', new_reward_vec)
 
     def get_reward(self, obs, action=None):
         """
@@ -1341,7 +1349,12 @@ class LinearReward(object):
         else:
             features = obs
 
-        features = features * self.normalize_s[None] + 0.5
+        features = features * self.normalize_s[None] + self.normalize_b[None]
+
+        # print('features:', np.amin(features), np.amax(features))
+
         reward = np.squeeze(np.matmul(features, self.reward_vec[..., None]))
+
+        # print(reward)#, self.reward_vec) #
 
         return reward

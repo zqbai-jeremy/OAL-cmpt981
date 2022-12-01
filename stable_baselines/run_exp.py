@@ -118,10 +118,10 @@ def train(env_id, algo, num_timesteps, seed, sgd_steps, t_pi, t_c, lam, log, exp
             from stable_baselines import SAC
             env = VecNormalize(env, norm_reward=False, norm_obs=False)
             model = SAC.load(expert_model, env)
-            generate_expert_traj(model, expert_path, n_timesteps=num_timesteps, n_episodes=10, evaluate=True)
+            generate_expert_traj(model, expert_path, n_timesteps=num_timesteps, n_episodes=2000, evaluate=False)
         else:
             expert_path = expert_path + '.npz'
-            dataset = ExpertDataset(expert_path=expert_path, traj_limitation=10, verbose=1)
+            dataset = ExpertDataset(expert_path=expert_path, traj_limitation=2000, verbose=1)
 
             if algo == 'MDAL':
                 model = MDAL_MDPO_OFF('MlpPolicy', env, dataset, verbose=1,

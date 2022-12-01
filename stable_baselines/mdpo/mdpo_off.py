@@ -220,7 +220,7 @@ class MDPO_OFF(OffPolicyRLModel):
                                                                  t_c=self.t_c,
                                                                  is_action_features=self.is_action_features)
                 elif self.using_proj:
-                    self.reward_giver = LinearReward(self.sess, self.observation_space, self.action_space,
+                    self.reward_giver = LinearReward(self.env, self.sess, self.observation_space, self.action_space,
                                                      is_action_features=self.is_action_features)
 
 
