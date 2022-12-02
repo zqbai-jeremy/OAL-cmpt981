@@ -781,13 +781,13 @@ class MWAL(object):
             model.reward_giver.update_reward(reward_vec)
             model.learn(total_timesteps // T, tb_log_name='iter%04d' % i)
             feat_exp = self.get_feature_expectation(model, env, 100)
-            model.save(os.path.join(self.logdir, 'iter%04d' % i))
-            del model
             feat_exps.append(feat_exp)
+            model.save(os.path.join(self.logdir, 'iter%04d' % i))
+            gamma = model.gamma
+            del model
             beta = 1 / (1 + np.sqrt(2 * np.log(np.shape(W)) / T))
-            for j in range(len(W)):
-                G_j = ((1 - model.gamma)(feat_exp[j] - self.expert_feat_exp) + 2) / 4
-                W[j] = W[j] * np.exp(np.log(beta) * G_j)
+            G = ((1 - gamma) * (feat_exp - self.expert_feat_exp) + 2 * np.ones(np.shape(W))) / 4
+            W = W * beta ** G
 
         policy_weights = np.ones(T) / T
 
