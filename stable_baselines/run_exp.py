@@ -19,7 +19,7 @@ import os
 
 def train(env_id, algo, num_timesteps, seed, sgd_steps, t_pi, t_c, lam, log, expert_path, pretrain, pretrain_epochs,
           mdpo_update_steps, num_trajectories, expert_model, exploration_bonus, bonus_coef, random_action_len,
-          is_action_features, dir_name, neural, lipschitz, args):
+          is_action_features, dir_name, neural, lipschitz, mdpSolver, args):
     """
     Train TRPO model for the mujoco environment, for testing purposes
     :param env_id: (str) Environment ID
@@ -180,7 +180,7 @@ def train(env_id, algo, num_timesteps, seed, sgd_steps, t_pi, t_c, lam, log, exp
                                       lam=0.0, train_freq=1, d_step=10, tsallis_q=1, reparameterize=True, t_pi=t_pi, t_c=t_c,
                                       exploration_bonus=exploration_bonus, bonus_coef=bonus_coef,
                                       is_action_features=is_action_features,
-                                      neural=neural, lipschitz=lipschitz)
+                                      neural=neural, lipschitz=lipschitz, mdpSolver=mdpSolver)
             elif algo == 'MWAL':
                 model = MWAL('MlpPolicy', env, dataset, verbose=1,
                                       tensorboard_log="./experiments/" + env_name + "/mwal/", seed=seed,
@@ -229,7 +229,7 @@ def main():
               t_pi=args.t_pi, t_c=args.t_c, lam=args.lam, log=log,
               pretrain=args.pretrain, pretrain_epochs=args.pretrain_epochs,
               exploration_bonus=args.exploration, bonus_coef=args.bonus_coef,
-                          random_action_len=args.random_action_len, dir_name=args.dir_name, neural=args.neural,
+                          random_action_len=args.random_action_len, dir_name=args.dir_name, neural=args.neural, mdpSolver=args.mdpSolver,
                           args=args)
 
 
