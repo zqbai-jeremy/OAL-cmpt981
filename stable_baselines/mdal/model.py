@@ -1040,12 +1040,14 @@ class ProjFWMethod(object):
 
         # Vertices set
         S = []
+        #S.append(np.array(feat_exp, dtype=np.float32))
         S.append(feat_exp)
 
         # Alphas is a dictionary contains coefficients of all the
         alphas = {}
         # Turn this vector to a string
-        alphas[repr(feat_exp)] = 1
+        alphas[repr(list(np.array(feat_exp, dtype=np.float32)))] = 1
+        print(alphas)
 
         for i in range(1, num_proj_iters + 1):
             new_S = []
@@ -1056,7 +1058,7 @@ class ProjFWMethod(object):
             model.reward_giver.update_reward(self.expert_feat_exp - feat_exps_bar[-1])
             model.learn(total_timesteps // num_proj_iters, tb_log_name='iter%04d' % i)
 
-            print("Reward is ")
+            print("Reward is {}".format(self.expert_feat_exp - feat_exps_bar[-1]))
             # Compute the New Policy's feature expectation
             feat_exp = self.get_feature_expectation(model, env, 100)
             model.save(os.path.join(self.logdir, 'iter%04d' % i))
@@ -1069,12 +1071,14 @@ class ProjFWMethod(object):
             h_deriv = (feat_exps_bar[-1] - self.expert_feat_exp)
             # Then find y_t
             y_idx, y_t = self.linear_oracle(-h_deriv, K)
+            print("K set is {}".format(K))
+            print("y_t is {}".format(list(np.array(y_t, dtype=np.float32))))
             d_FW = y_t - feat_exps_bar[-1]
 
             # Line 5 of ASCG algo
             z_idx, z_t = self.linear_oracle(h_deriv, S)
             d_AS = feat_exps_bar[-1] - z_t
-            print("z_t is {}".format(z_t))
+            #print("z_t is {}".format(z_t))
 
             FW_step = False
             # Just initializing them to 0
@@ -1088,14 +1092,14 @@ class ProjFWMethod(object):
             else:
                 FW_step = False
                 d = d_AS
-                if alphas[repr(z_t)] == 1:
+                if alphas[repr(list(np.array(z_t, dtype=np.float32)))] == 1:
                     gamma_max = 100
                 else:
-                    gamma_max = alphas[repr(z_t)] / (1 - alphas[repr(z_t)])
+                    gamma_max = alphas[repr(list(np.array(z_t, dtype=np.float32)))] / (1 - alphas[repr(list(np.array(z_t, dtype=np.float32)))])
 
             # Line search
             gamma_t = self.linesearch(feat_exps_bar[-1], gamma_max, d)
-            print()
+            #print()
             # Update
             feat_exp_bar = feat_exp + gamma_t * d
             feat_exps_bar.append(feat_exp_bar)
@@ -1104,26 +1108,34 @@ class ProjFWMethod(object):
             if FW_step:
                 if gamma_t == 1:
                     new_S = [y_t]
-                    alphas[repr(list(y_t))] = 1
+                    alphas[repr(list(np.array(y_t, dtype=np.float32)))] = 1
                 else:
-                    print("y_t is {}".format(y_t))
-                    alphas[repr(list(y_t))] = (1 - gamma_t) * alphas[repr(list(y_t))] + gamma_t
+                    #print(alphas)
+                    #print("y_t is {}".format(list(np.array(y_t, dtype=np.float32))))
+                    if repr(list(np.array(y_t, dtype=np.float32))) not in alphas:
+                        alphas[repr(list(np.array(y_t, dtype=np.float32)))] = 1.0
+                    alphas[repr(list(np.array(y_t, dtype=np.float32)))] = (1 - gamma_t) * alphas[repr(list(np.array(y_t, dtype=np.float32)))] + gamma_t
                     for idx, y in enumerate(S):
-                        alphas[repr(list(y))] = (1 - gamma_t) * alphas[repr(list(y))]
+                        alphas[repr(list(np.array(y, dtype=np.float32)))] = (1 - gamma_t) * alphas[repr(list(np.array(y, dtype=np.float32)))]
                     S.append(y_t)
                     new_S = S
             # Away step
             else:
-                # if gamma_t == gamma_max:
-                #     print("I'm here")
-                #     print(S)
-                #     S.pop(z_idx)
-                #     new_S = S
+                if gamma_t == gamma_max:
+                    print("I'm here")
+                    print(S)
+                    S.pop(z_idx)
+                    new_S = S
                 # A little hack here, to avoid an empty S set
-                alphas[repr(list(z_t))] = (1 - gamma_t) * alphas[repr(list(z_t))] - gamma_t
-                for idx, y in enumerate(S):
-                    alphas[repr(list(y))] = (1 + gamma_t) * alphas[repr(list(y))]
-                new_S = S
+                #print(alphas)
+                else:
+                    if repr(list(np.array(z_t, dtype=np.float32))) not in alphas:
+                        alphas[repr(list(np.array(z_t, dtype=np.float32)))] = 1.0
+
+                    alphas[repr(list(np.array(z_t, dtype=np.float32)))] = (1 - gamma_t) * alphas[repr(list(np.array(z_t, dtype=np.float32)))] - gamma_t
+                    for idx, y in enumerate(S):
+                        alphas[repr(list(np.array(y, dtype=np.float32)))] = (1 + gamma_t) * alphas[repr(list(np.array(y, dtype=np.float32)))]
+                    new_S = S
 
             # Assign previous
             S = new_S
