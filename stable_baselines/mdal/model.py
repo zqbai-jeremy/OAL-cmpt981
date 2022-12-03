@@ -490,7 +490,10 @@ class Proj(object):
             if self.mdpSolver == "PG":
                 model = PG(**self.kwargs)
             else:
+                if i > 1:
+                    self.kwargs.update({'learning_starts': 0})
                 model = Proj_MDPO_OFF(**self.kwargs)
+                model = self.load(os.path.join(self.logdir, 'iter%04d' % (i - 1)), model)
             model.reward_giver.update_reward(self.expert_feat_exp - feat_exps_bar[-1])
             model.learn(total_timesteps // num_proj_iters, tb_log_name='iter%04d' % i)
             feat_exp = self.get_feature_expectation(model, env, 100)
@@ -516,6 +519,11 @@ class Proj(object):
 
     def save(self, save_path):
         pass
+
+    def load(self, load_path, model):
+        data, params = model._load_from_file(load_path)
+        model.load_parameters(params)
+        return model
 
 
 class MWAL_MDPO_OFF(MDPO_OFF):
