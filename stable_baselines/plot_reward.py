@@ -3,7 +3,8 @@ import numpy as np
 import matplotlib.pyplot as plt
 
 
-env_name = 'Pendulum-v0'
+env_name = 'MountainCarContinuous-v0'
+#'Pendulum-v0'
 if env_name == 'Pendulum-v0':
     data_paths = {
         'OAL': '/mnt/Exp_ziqian/cmpt981/proj/OAL-cmpt981/stable_baselines/experiments/pendulum/mdal/tpi0.5_tc0.05_lam0.98_/MDAL_updateSteps10_states_only_s0/monitor.csv',
