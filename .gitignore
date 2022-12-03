@@ -42,3 +42,5 @@ MUJOCO_LOG.TXT
 
 # Experiments
 stable_baselines/experiments
+tmp
+plots
