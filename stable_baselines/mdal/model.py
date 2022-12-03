@@ -459,7 +459,7 @@ class Proj(object):
         feat_exp = feat_exp[:-1] * self.normalize_s + self.normalize_b
         return feat_exp
 
-    def learn(self, total_timesteps, num_proj_iters=10, callback=None, log_interval=2000, tb_log_name="Proj_MDPO_OFF",
+    def learn(self, total_timesteps, num_proj_iters=5, callback=None, log_interval=2000, tb_log_name="Proj_MDPO_OFF",
               reset_num_timesteps=True):
         assert self.expert_dataset is not None, "You must pass an expert dataset to Proj_MDPO_OFF for training"
 
@@ -468,6 +468,8 @@ class Proj(object):
         ts = []
         policy_weights = []
         env = self.kwargs['env']
+        diff_results = []
+
 
         # Initialize
         # kwargs = copy.deepcopy(self.kwargs)
@@ -510,7 +512,9 @@ class Proj(object):
             assert policy_weight_pre.shape == policy_weight_i.shape
             policy_weight = policy_weight_pre + alpha * (policy_weight_i - policy_weight_pre)
             policy_weights.append(policy_weight)
+            diff_results.append(LA.norm(feat_exp_bar - self.expert_feat_exp, 2))
 
+        print("Diff results is {}".format(diff_results))
         with open(os.path.join(self.logdir, 'data.pkl'), 'wb') as f:
             pickle.dump({'feat_exps_bar': feat_exps_bar, 'policy_weights': policy_weights, 'feat_exps': feat_exps}, f)
 
@@ -996,7 +1000,7 @@ class ProjFWMethod(object):
         # h function is distance square between expert and the current expectations
 
         # Let's use backtracking linesearch
-        c = 0.01
+        c = 0.5
         step_size = gamma_max
         beta = 0.9
         grad = x - self.expert_feat_exp
@@ -1010,7 +1014,7 @@ class ProjFWMethod(object):
 
         return step_size
 
-    def learn(self, total_timesteps, num_proj_iters=5, callback=None, log_interval=2000, tb_log_name="Proj_MDPO_OFF",
+    def learn(self, total_timesteps, num_proj_iters=10, callback=None, log_interval=2000, tb_log_name="Proj_MDPO_OFF",
               reset_num_timesteps=True):
         assert self.expert_dataset is not None, "You must pass an expert dataset to Proj_MDPO_OFF for training"
 
@@ -1048,6 +1052,9 @@ class ProjFWMethod(object):
         # Turn this vector to a string
         alphas[repr(list(np.array(feat_exp, dtype=np.float32)))] = 1
         print(alphas)
+
+        diff_results = []
+        gamma_list = []
 
         for i in range(1, num_proj_iters + 1):
             new_S = []
@@ -1096,12 +1103,14 @@ class ProjFWMethod(object):
                     gamma_max = 100
                 else:
                     gamma_max = alphas[repr(list(np.array(z_t, dtype=np.float32)))] / (1 - alphas[repr(list(np.array(z_t, dtype=np.float32)))])
+                    print(gamma_max)
 
             # Line search
             gamma_t = self.linesearch(feat_exps_bar[-1], gamma_max, d)
             #print()
             # Update
             feat_exp_bar = feat_exp + gamma_t * d
+            gamma_list.append(gamma_t)
             feat_exps_bar.append(feat_exp_bar)
 
             # Update representation
@@ -1124,9 +1133,10 @@ class ProjFWMethod(object):
                 if gamma_t == gamma_max:
                     print("I'm here")
                     print(S)
-                    S.pop(z_idx)
+                    # A little hack here, to avoid an empty S set
+                    if len(S) != 1:
+                        S.pop(z_idx)
                     new_S = S
-                # A little hack here, to avoid an empty S set
                 #print(alphas)
                 else:
                     if repr(list(np.array(z_t, dtype=np.float32))) not in alphas:
@@ -1148,6 +1158,12 @@ class ProjFWMethod(object):
             policy_weight = policy_weight_pre + gamma_t * (policy_weight_i - policy_weight_pre)
             policy_weights.append(policy_weight)
 
+            print("Difference compared to expert {}".format(LA.norm(feat_exp_bar - self.expert_feat_exp, 2 )))
+            diff_results.append(LA.norm(feat_exp_bar - self.expert_feat_exp, 2))
+
+        print(diff_results)
+        print("Expectation over time is {}".format(feat_exps_bar))
+        print("gamma list {}".format(gamma_list))
         with open(os.path.join(self.logdir, 'data.pkl'), 'wb') as f:
             pickle.dump({'feat_exps_bar': feat_exps_bar, 'policy_weights': policy_weights, 'feat_exps': feat_exps}, f)
 
