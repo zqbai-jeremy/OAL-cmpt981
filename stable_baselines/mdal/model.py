@@ -459,7 +459,7 @@ class Proj(object):
         feat_exp = feat_exp[:-1] * self.normalize_s + self.normalize_b
         return feat_exp
 
-    def learn(self, total_timesteps, num_proj_iters=5, callback=None, log_interval=2000, tb_log_name="Proj_MDPO_OFF",
+    def learn(self, total_timesteps, num_proj_iters=10, callback=None, log_interval=2000, tb_log_name="Proj_MDPO_OFF",
               reset_num_timesteps=True):
         assert self.expert_dataset is not None, "You must pass an expert dataset to Proj_MDPO_OFF for training"
 
@@ -795,7 +795,10 @@ class MWAL(object):
             print('mwal iter:', i)
             # kwargs = copy.deepcopy(self.kwargs)
             # kwargs['tensorboard_log'] = os.path.join(kwargs['tensorboard_log'], 'iter%04d' % i)
+            if i > 1:
+                self.kwargs.update({'learning_starts': 0})
             model = MWAL_MDPO_OFF(**self.kwargs)
+            model = self.load(os.path.join(self.logdir, 'iter%04d' % (i - 1)), model)
             reward_vec = W / np.sum(W)
             reward_vecs.append(reward_vec)
             model.reward_giver.update_reward(reward_vec)
@@ -816,6 +819,11 @@ class MWAL(object):
 
     def save(self, save_path):
         pass
+
+    def load(self, load_path, model):
+        data, params = model._load_from_file(load_path)
+        model.load_parameters(params)
+        return model
 
 
 class ProjFWMethod(object):
@@ -1022,7 +1030,7 @@ class ProjFWMethod(object):
 
         return step_size
 
-    def learn(self, total_timesteps, num_proj_iters=10, callback=None, log_interval=2000, tb_log_name="Proj_MDPO_OFF",
+    def learn(self, total_timesteps, num_proj_iters=40, callback=None, log_interval=2000, tb_log_name="Proj_MDPO_OFF",
               reset_num_timesteps=True):
         assert self.expert_dataset is not None, "You must pass an expert dataset to Proj_MDPO_OFF for training"
 
@@ -1069,7 +1077,10 @@ class ProjFWMethod(object):
             print('proj iter:', i)
 
             # MDPO can be replaced
+            if i > 1:
+                self.kwargs.update({'learning_starts': 0})
             model = Proj_MDPO_OFF(**self.kwargs)
+            model = self.load(os.path.join(self.logdir, 'iter%04d' % (i - 1)), model)
             model.reward_giver.update_reward(self.expert_feat_exp - feat_exps_bar[-1])
             model.learn(total_timesteps // num_proj_iters, tb_log_name='iter%04d' % i)
 
@@ -1178,6 +1189,10 @@ class ProjFWMethod(object):
     def save(self, save_path):
         pass
 
+    def load(self, load_path, model):
+        data, params = model._load_from_file(load_path)
+        model.load_parameters(params)
+        return model
 
 
 from stable_baselines.sac import SAC

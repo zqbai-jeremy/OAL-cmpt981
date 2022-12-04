@@ -192,7 +192,7 @@ def train(env_id, algo, num_timesteps, seed, sgd_steps, t_pi, t_c, lam, log, exp
                                       neural=neural, lipschitz=lipschitz)
             elif algo == 'PROJ_FW':
                 model = ProjFWMethod('MlpPolicy', env, dataset, verbose=1,
-                                      tensorboard_log="./experiments/" + env_name + "/proj/", seed=seed,
+                                      tensorboard_log="./experiments/" + env_name + "/proj_fw/", seed=seed,
                                       buffer_size=1000000, ent_coef=0.0, learning_starts=10000, batch_size=256, tau=0.01,
                                       gamma=0.99, gradient_steps=sgd_steps, mdpo_update_steps=mdpo_update_steps,
                                       lam=0.0, train_freq=1, d_step=10, tsallis_q=1, reparameterize=True, t_pi=t_pi, t_c=t_c,
