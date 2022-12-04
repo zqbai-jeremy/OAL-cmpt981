@@ -1279,6 +1279,10 @@ class PG(SAC):
         self.processed_obs_ph = None
         self.processed_next_obs_ph = None
         self.log_ent_coef = None
+        
+        self.learning_starts = 100
+        self.ent_coef = 'auto'
+        self.tau = 0.05
 
         if _init_setup_model:
             self.setup_model()
