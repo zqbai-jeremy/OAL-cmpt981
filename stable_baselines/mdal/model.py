@@ -1015,20 +1015,28 @@ class ProjFWMethod(object):
     def linesearch(self, x, gamma_max, d):
         # h function is distance square between expert and the current expectations
 
-        # Let's use backtracking linesearch
-        c = 0.5
-        step_size = gamma_max
-        beta = 0.9
-        grad = x - self.expert_feat_exp
-        x_stepped = x + step_size * d
-        RHS = 0.5*LA.norm(x - self.expert_feat_exp, 2) + c*step_size*np.dot(grad, d)
+        # c = 0.5
+        # step_size = gamma_max
+        # beta = 0.9
+        # grad = x - self.expert_feat_exp
+        # x_stepped = x + step_size * d
+        # RHS = 0.5*LA.norm(x - self.expert_feat_exp, 2) + c*step_size*np.dot(grad, d)
+        #
+        # while 0.5*LA.norm(x_stepped - self.expert_feat_exp, 2) > RHS:
+        #     step_size = beta * step_size
+        #     x_stepped = x + step_size * d
+        #     RHS = 0.5*LA.norm(x - self.expert_feat_exp, 2) + c*step_size*np.dot(grad, d)
 
-        while 0.5*LA.norm(x_stepped - self.expert_feat_exp, 2) > RHS:
-            step_size = beta * step_size
-            x_stepped = x + step_size * d
-            RHS = 0.5*LA.norm(x - self.expert_feat_exp, 2) + c*step_size*np.dot(grad, d)
+        # Let's use exact line search
+        gamma_best = -np.dot(x - self.expert_feat_exp, d)/LA.norm(d, 2)
+        gamma = gamma_best
 
-        return step_size
+        if gamma_best < 0:
+            gamma = 0
+        elif gamma_best > gamma_max:
+            gamma = gamma_max
+
+        return gamma
 
     def learn(self, total_timesteps, num_proj_iters=40, callback=None, log_interval=2000, tb_log_name="Proj_MDPO_OFF",
               reset_num_timesteps=True):
