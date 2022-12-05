@@ -11,6 +11,7 @@ if env_name == 'Pendulum-v0':
         'GAIL': '/mnt/Exp_ziqian/cmpt981/proj/OAL-cmpt981/stable_baselines/experiments/pendulum/gail_mdpo_off/tpi0.5_tc0.05_lam0.98_/GAIL_MDPO_OFF_updateSteps10_states_only_s0/monitor.csv',
         'PROJ': '/mnt/Exp_ziqian/cmpt981/proj/OAL-cmpt981/stable_baselines/experiments/pendulum/proj/tpi0.5_tc0.05_lam0.98_/PROJ_updateSteps10_states_only_s0/monitor.csv',
         'FWAS': '/mnt/Exp_ziqian/cmpt981/proj/OAL-cmpt981/stable_baselines/experiments/pendulum/proj_fw/tpi0.5_tc0.05_lam0.98_/PROJ_FW_updateSteps10_states_only_s0/monitor.csv',
+        'MWAL': '/mnt/Exp_ziqian/cmpt981/proj/OAL-cmpt981/stable_baselines/experiments/pendulum/mwal/tpi0.5_tc0.05_lam0.98_/MWAL_updateSteps10_states_only_s0/monitor.csv',
     }
     gt_reward = -153.85
 elif env_name == 'MountainCarContinuous-v0':
@@ -19,11 +20,12 @@ elif env_name == 'MountainCarContinuous-v0':
         'GAIL': '/mnt/Exp_ziqian/cmpt981/proj/OAL-cmpt981/stable_baselines/experiments/mountaincarcontinuous/gail_mdpo_off/tpi0.5_tc0.05_lam0.98_/GAIL_MDPO_OFF_updateSteps10_states_only_s0/monitor.csv',
         'PROJ': '/mnt/Exp_ziqian/cmpt981/proj/OAL-cmpt981/stable_baselines/experiments/mountaincarcontinuous/proj/tpi0.5_tc0.05_lam0.98_/PROJ_updateSteps10_states_only_s0/monitor.csv',
         'FWAS': '/mnt/Exp_ziqian/cmpt981/proj/OAL-cmpt981/stable_baselines/experiments/mountaincarcontinuous/proj_fw/tpi0.5_tc0.05_lam0.98_/PROJ_FW_updateSteps10_states_only_s0/monitor.csv',
+        'MWAL': '/mnt/Exp_ziqian/cmpt981/proj/OAL-cmpt981/stable_baselines/experiments/mountaincarcontinuous/mwal/tpi0.5_tc0.05_lam0.98_/MWAL_updateSteps10_states_only_s0/monitor.csv',
     }
     gt_reward = 94.47
 out_dir = '/mnt/Exp_ziqian/cmpt981/proj/OAL-cmpt981/stable_baselines/plots'
-methods = ['PROJ', 'FWAS', 'GAIL', 'OAL']
-colors = ['red', 'orange', 'blue', 'green']
+methods = ['PROJ', 'MWAL', 'FWAS', 'GAIL', 'OAL']
+colors = ['red', 'pink', 'orange', 'blue', 'green']
 running_mean_half = 50
 
 # Plot
@@ -32,6 +34,12 @@ for j, method in enumerate(methods):
     data = np.genfromtxt(data_paths[method], delimiter=',')
     rewards = data[1:, 0]
     steps = np.cumsum(data[1:, 1])
+    learn_start = 0
+    while steps[learn_start] < (4000 if env_name == 'Pendulum-v0' else 10000):
+        learn_start += 1
+    print(learn_start)
+    rewards = rewards[learn_start:]
+    steps = steps[learn_start:] / 10
     rewards_runmean = []
     for i in range(rewards.shape[0]):
         start = max(0, i - running_mean_half)

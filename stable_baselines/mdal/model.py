@@ -770,7 +770,7 @@ class MWAL(object):
         feat_exp = feat_exp[:-1] * self.normalize_s + self.normalize_b
         return feat_exp
 
-    def learn(self, total_timesteps, T=10, callback=None, log_interval=2000, tb_log_name="MWAL_MDPO_OFF",
+    def learn(self, total_timesteps, T=40, callback=None, log_interval=2000, tb_log_name="MWAL_MDPO_OFF",
               reset_num_timesteps=True):
         assert self.expert_dataset is not None, "You must pass an expert dataset to MWAL_MDPO_OFF for training"
 
