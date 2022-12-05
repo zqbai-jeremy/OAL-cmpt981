@@ -1,5 +1,4 @@
 from stable_baselines.trpo_mpi import TRPO
-# from stable_baselines.sac import SAC
 from stable_baselines.mdpo import MDPO_OFF, MDPO_ON
 
 import os
@@ -491,6 +490,7 @@ class Proj(object):
             # kwargs['tensorboard_log'] = os.path.join(kwargs['tensorboard_log'], 'iter%04d' % i)
             if self.mdpSolver == "PG":
                 model = PG(**self.kwargs)
+                model = self.load(os.path.join(self.logdir, 'iter%04d' % (i - 1)), model)
             else:
                 if i > 1:
                     self.kwargs.update({'learning_starts': 0})
