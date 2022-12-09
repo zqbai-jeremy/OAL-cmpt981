@@ -220,6 +220,36 @@ class MDAL_MDPO_OFF(MDPO_OFF):
         return super().learn(total_timesteps, callback, log_interval, tb_log_name, reset_num_timesteps)
 
 
+def multilinear_polynomial_feature_expectation(episode_obs, episode_act, gamma, normalize_s, normalize_b):
+    n_episodes = episode_obs.shape[0]
+    for ep_idx, (ep_obs, ep_act), in enumerate(zip(episode_obs, episode_act)):
+        # print(ep_idx)
+        for idx, (obs, act) in enumerate(zip(reversed(ep_obs), reversed(ep_act))):
+            current_features = np.concatenate((obs, act), axis=0)
+            feat = current_features * normalize_s + normalize_b
+            assert feat.shape == (3,)
+            # current_features = np.concatenate([
+            #     feat,
+            #     np.array([feat[0] * feat[1], feat[0] * feat[2], feat[1] * feat[2], feat[0] * feat[1] * feat[2]])
+            # ], axis=0)
+            # assert current_features.shape == (7,)
+            current_features = np.concatenate([
+                feat * (feat[0] < 0.5).astype(np.int32),
+                feat * (1 - (feat[0] < 0.5).astype(np.int32))
+            ], axis=0)
+            assert current_features.shape == (6,)
+            if idx == 0:
+                successor_features = current_features
+            else:
+                successor_features = np.add(gamma * successor_features, current_features)
+        if ep_idx == 0:
+            sum_successor_features = successor_features
+        else:
+            sum_successor_features = np.add(sum_successor_features, successor_features)
+
+    successor_features = sum_successor_features / n_episodes
+    return successor_features
+
 class Proj_MDPO_OFF(MDPO_OFF):
     """
     Generative Adversarial Imitation Learning (GAIL)
@@ -316,15 +346,21 @@ class Proj(object):
         self.mdpSolver = mdpSolver
         self.expert_dataset = expert_dataset
         # self.normalize_s = np.array([1./2., 1./2., 1./16., 1./4.], dtype=np.float32)
-        assert not is_action_features
+        # assert not is_action_features
         if env.envs[0].spec.id == 'Pendulum-v0':
+            assert not is_action_features
             self.normalize_s = np.array([1./2., 1./2., 1./16.], dtype=np.float32)
             self.normalize_b = np.array([0.5, 0.5, 0.5], dtype=np.float32)
+            expert_feat_exp = self.expert_dataset.successor_features * 100 # gamma has to be 0.99. successor_features has extra * (1 - gamma)
+            self.expert_feat_exp = expert_feat_exp[:-1] * self.normalize_s + self.normalize_b
         elif env.envs[0].spec.id == 'MountainCarContinuous-v0':
-            self.normalize_s = np.array([1/1.8, 1/0.14], dtype=np.float32)
-            self.normalize_b = np.array([2./3., 0.5], dtype=np.float32)
-        expert_feat_exp = self.expert_dataset.successor_features * 100 # gamma has to be 0.99. successor_features has extra * (1 - gamma)
-        self.expert_feat_exp = expert_feat_exp[:-1] * self.normalize_s + self.normalize_b
+            self.normalize_s = np.array([1/1.8, 1/0.14, 1./2.], dtype=np.float32)
+            self.normalize_b = np.array([2./3., 0.5, 0.5], dtype=np.float32)
+            assert is_action_features
+            # self.normalize_s = np.array([1/1.2, 1/0.07, 1.], dtype=np.float32)
+            self.expert_feat_exp = multilinear_polynomial_feature_expectation(
+                expert_dataset.ep_obs, expert_dataset.ep_acs, kwargs['gamma'], self.normalize_s, self.normalize_b)
+            # self.expert_feat_exp = self.expert_feat_exp * 0.5 + 0.5
         self.model = None
         self.alpha = None
         self.logdir = kwargs['tensorboard_log']
@@ -451,12 +487,17 @@ class Proj(object):
 
         assert len(observations) == len(actions)
 
-        return successor_features
+        return successor_features, episode_obs, episode_act
 
     def get_feature_expectation(self, model, env, n_episodes=10):
-        feat_exp = self.get_feature_expectation_raw(model, env.envs[0].env, n_episodes)
-        feat_exp = feat_exp * 100 # gamma has to be 0.99. successor_features has extra * (1 - gamma)
-        feat_exp = feat_exp[:-1] * self.normalize_s + self.normalize_b
+        feat_exp, episode_obs, episode_act = self.get_feature_expectation_raw(model, env.envs[0].env, n_episodes)
+        if env.envs[0].spec.id == 'Pendulum-v0':
+            feat_exp = feat_exp * 100 # gamma has to be 0.99. successor_features has extra * (1 - gamma)
+            feat_exp = feat_exp[:-1] * self.normalize_s + self.normalize_b
+        elif env.envs[0].spec.id == 'MountainCarContinuous-v0':
+            feat_exp = multilinear_polynomial_feature_expectation(
+                np.array(episode_obs), np.array(episode_act), self.kwargs['gamma'], self.normalize_s, self.normalize_b)
+            # feat_exp = feat_exp * 0.5 + 0.5
         return feat_exp
 
     def learn(self, total_timesteps, num_proj_iters=10, callback=None, log_interval=2000, tb_log_name="Proj_MDPO_OFF",
@@ -484,6 +525,7 @@ class Proj(object):
         feat_exps.append(feat_exp)
         feat_exps_bar.append(feat_exp)
         policy_weights.append(np.array([1.], dtype=np.float32))
+        print('t is', LA.norm(feat_exp - self.expert_feat_exp, 2))
 
         for i in range(1, num_proj_iters + 1):
             print('proj iter:', i)
@@ -492,8 +534,8 @@ class Proj(object):
             if self.mdpSolver == "PG":
                 model = PG(**self.kwargs)
             else:
-                if i > 1:
-                    self.kwargs.update({'learning_starts': 0})
+                # if i > 1:
+                #     self.kwargs.update({'learning_starts': 0})
                 model = Proj_MDPO_OFF(**self.kwargs)
                 model = self.load(os.path.join(self.logdir, 'iter%04d' % (i - 1)), model)
             model.reward_giver.update_reward(self.expert_feat_exp - feat_exps_bar[-1])
@@ -505,7 +547,7 @@ class Proj(object):
 
             alpha = np.dot(feat_exp - feat_exps_bar[-1], self.expert_feat_exp - feat_exps_bar[-1]) / \
                     np.dot(feat_exp - feat_exps_bar[-1], feat_exp - feat_exps_bar[-1])
-            alpha = np.clip(alpha, 0, 1)
+            alpha = np.clip(alpha, 0, 1) #np.clip(alpha, 0.05, 1) #np.clip(alpha, 2 / (i + 1), 1) if i > 2 else np.clip(alpha, 0, 1)
             feat_exp_bar = feat_exps_bar[-1] + alpha * (feat_exp - feat_exps_bar[-1])
             feat_exps_bar.append(feat_exp_bar)
 
@@ -516,6 +558,7 @@ class Proj(object):
             policy_weight = policy_weight_pre + alpha * (policy_weight_i - policy_weight_pre)
             policy_weights.append(policy_weight)
             diff_results.append(LA.norm(feat_exp_bar - self.expert_feat_exp, 2))
+            print('t is', LA.norm(feat_exp_bar - self.expert_feat_exp, 2))
 
         print("Diff results is {}".format(diff_results))
         with open(os.path.join(self.logdir, 'data.pkl'), 'wb') as f:
@@ -527,6 +570,11 @@ class Proj(object):
     def load(self, load_path, model):
         data, params = model._load_from_file(load_path)
         model.load_parameters(params)
+        return model
+
+    def load_model(self, load_path):
+        model = Proj_MDPO_OFF(**self.kwargs)
+        model = self.load(load_path, model)
         return model
 
 
@@ -1038,7 +1086,7 @@ class ProjFWMethod(object):
 
         return gamma
 
-    def learn(self, total_timesteps, num_proj_iters=40, callback=None, log_interval=2000, tb_log_name="Proj_MDPO_OFF",
+    def learn(self, total_timesteps, num_proj_iters=10, callback=None, log_interval=2000, tb_log_name="Proj_MDPO_OFF",
               reset_num_timesteps=True):
         assert self.expert_dataset is not None, "You must pass an expert dataset to Proj_MDPO_OFF for training"
 
@@ -1201,6 +1249,17 @@ class ProjFWMethod(object):
         data, params = model._load_from_file(load_path)
         model.load_parameters(params)
         return model
+
+    def test_ep(self, logdir, iter):
+        pass
+
+    def test(self, logdir, outdir, total_timesteps, num_iters):
+        steps = []
+        for i in range(1, num_iters):
+            steps.append(total_timesteps // num_iters * i)
+            ep_rewards = []
+            for j in range(100):
+                ep_reward
 
 
 from stable_baselines.sac import SAC

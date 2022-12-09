@@ -1314,18 +1314,26 @@ class LinearReward(object):
             self.inverse_covariance = None
         """
         # Placeholders
-        self.reward_vec = np.zeros((self.n_features, ), dtype=np.float32)
+        # self.reward_vec = np.zeros((self.n_features, ), dtype=np.float32)
         # self.normalize_s = np.array([1./2., 1./2., 1./16., 1./2.], dtype=np.float32) # MLP output action is in [-1, 1]
-        assert not is_action_features
+        # assert not is_action_features
         if env.envs[0].spec.id == 'Pendulum-v0':
+            assert not is_action_features
             self.normalize_s = np.array([1./2., 1./2., 1./16.], dtype=np.float32)
             self.normalize_b = np.array([0.5, 0.5, 0.5], dtype=np.float32)
+            self.reward_vec = np.zeros((self.n_features, ), dtype=np.float32)
         elif env.envs[0].spec.id == 'MountainCarContinuous-v0':
-            self.normalize_s = np.array([1/1.8, 1/0.14], dtype=np.float32)
-            self.normalize_b = np.array([2./3., 0.5], dtype=np.float32)
+            self.normalize_s = np.array([1/1.8, 1/0.14, 1./2.], dtype=np.float32)
+            self.normalize_b = np.array([2./3., 0.5, 0.5], dtype=np.float32)
+            assert is_action_features
+            # self.normalize_s = np.array([1/1.2, 1/0.07, 1.], dtype=np.float32)
+            # self.reward_vec = np.zeros((7, ), dtype=np.float32)
+            self.reward_vec = np.zeros((6, ), dtype=np.float32)
+        self.env_id = env.envs[0].spec.id
 
     def update_reward(self, new_reward_vec):
         new_reward_vec = new_reward_vec / np.linalg.norm(new_reward_vec)
+        assert new_reward_vec.shape == self.reward_vec.shape
         self.reward_vec = new_reward_vec
 
         # print('reward w:', new_reward_vec)
@@ -1349,7 +1357,24 @@ class LinearReward(object):
         else:
             features = obs
 
-        features = features * self.normalize_s[None] + self.normalize_b[None]
+        if self.env_id == 'Pendulum-v0':
+            features = features * self.normalize_s[None] + self.normalize_b[None]
+        elif self.env_id == 'MountainCarContinuous-v0':
+            feat = features * self.normalize_s[None] + self.normalize_b[None]
+            assert feat.shape == (feat.shape[0], 3)
+            # features = np.concatenate([
+            #     feat,
+            #     np.concatenate([feat[:, 0, None] * feat[:, 1, None], feat[:, 0, None] * feat[:, 2, None],
+            #         feat[:, 1, None] * feat[:, 2, None],
+            #         feat[:, 0, None] * feat[:, 1, None] * feat[:, 2, None]], axis=1)
+            # ], axis=1)
+            # assert features.shape == (feat.shape[0], 7)
+            features = np.concatenate([
+                feat * (feat[:, 0, None] < 0.5).astype(np.int32),
+                feat * (1 - (feat[:, 0, None] < 0.5).astype(np.int32))
+            ], axis=1)
+            assert features.shape == (feat.shape[0], 6)
+            # features = features * 0.5 + 0.5
 
         # print('features:', np.amin(features), np.amax(features))
 
