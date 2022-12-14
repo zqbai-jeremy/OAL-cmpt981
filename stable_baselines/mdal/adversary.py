@@ -1328,11 +1328,24 @@ class LinearReward(object):
             assert is_action_features
             # self.normalize_s = np.array([1/1.2, 1/0.07, 1.], dtype=np.float32)
             # self.reward_vec = np.zeros((7, ), dtype=np.float32)
-            self.reward_vec = np.zeros((6, ), dtype=np.float32)
+            # self.reward_vec = np.zeros((6, ), dtype=np.float32)
+
+            # For PROJ --------------------------------------------------
+            N = 3
+            self.reward_vec = np.zeros((3 * N * N, ), dtype=np.float32)
+            self.n_features = 3 * N * N
+            # For PROJ --------------------------------------------------
+
+        # For MWAL --------------------------------------------------
+        self.n_features *= 2
+        self.reward_vec = np.zeros((self.n_features, ), dtype=np.float32)
+        # For MWAL --------------------------------------------------
+
         self.env_id = env.envs[0].spec.id
 
-    def update_reward(self, new_reward_vec):
-        new_reward_vec = new_reward_vec / np.linalg.norm(new_reward_vec)
+    def update_reward(self, new_reward_vec, use_normalize=True):
+        if use_normalize:
+            new_reward_vec = new_reward_vec / np.linalg.norm(new_reward_vec) # commit out for MWAL
         assert new_reward_vec.shape == self.reward_vec.shape
         self.reward_vec = new_reward_vec
 
@@ -1360,8 +1373,8 @@ class LinearReward(object):
         if self.env_id == 'Pendulum-v0':
             features = features * self.normalize_s[None] + self.normalize_b[None]
         elif self.env_id == 'MountainCarContinuous-v0':
-            feat = features * self.normalize_s[None] + self.normalize_b[None]
-            assert feat.shape == (feat.shape[0], 3)
+            features = features * self.normalize_s[None] + self.normalize_b[None]
+            assert features.shape == (features.shape[0], 3)
             # features = np.concatenate([
             #     feat,
             #     np.concatenate([feat[:, 0, None] * feat[:, 1, None], feat[:, 0, None] * feat[:, 2, None],
@@ -1369,12 +1382,35 @@ class LinearReward(object):
             #         feat[:, 0, None] * feat[:, 1, None] * feat[:, 2, None]], axis=1)
             # ], axis=1)
             # assert features.shape == (feat.shape[0], 7)
-            features = np.concatenate([
-                feat * (feat[:, 0, None] < 0.5).astype(np.int32),
-                feat * (1 - (feat[:, 0, None] < 0.5).astype(np.int32))
-            ], axis=1)
-            assert features.shape == (feat.shape[0], 6)
+            # features = np.concatenate([
+            #     feat * (feat[:, 0, None] < 0.5).astype(np.int32),
+            #     feat * (1 - (feat[:, 0, None] < 0.5).astype(np.int32))
+            # ], axis=1)
+            # assert features.shape == (feat.shape[0], 6)
             # features = features * 0.5 + 0.5
+
+            # For PROJ --------------------------------------------------
+            N = 3
+            piece_ranges = np.linspace(0, 1, N + 1)
+            current_features = []
+            for i in range(N):
+                for j in range(N):
+                    x_flag = (
+                        (features[:, 0, None] >= piece_ranges[i]).astype(np.int32) *
+                        (features[:, 0, None] < piece_ranges[i + 1]).astype(np.int32)
+                    )
+                    y_flag = (
+                        (features[:, 1, None] >= piece_ranges[j]).astype(np.int32) *
+                        (features[:, 1, None] < piece_ranges[j + 1]).astype(np.int32)
+                    )
+                    current_features.append(features * x_flag * y_flag)
+            features = np.concatenate(current_features, axis=1)
+            assert features.shape == (obs.shape[0], 3 * N * N)
+            # For PROJ --------------------------------------------------
+
+        # For MWAL --------------------------------------------------
+        features = np.concatenate([features, -features], axis=1)
+        # For MWAL --------------------------------------------------
 
         # print('features:', np.amin(features), np.amax(features))
 

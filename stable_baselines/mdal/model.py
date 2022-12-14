@@ -219,7 +219,7 @@ class MDAL_MDPO_OFF(MDPO_OFF):
         return super().learn(total_timesteps, callback, log_interval, tb_log_name, reset_num_timesteps)
 
 
-def multilinear_polynomial_feature_expectation(episode_obs, episode_act, gamma, normalize_s, normalize_b):
+def piecewise_feature_expectation(episode_obs, episode_act, gamma, normalize_s, normalize_b):
     n_episodes = episode_obs.shape[0]
     for ep_idx, (ep_obs, ep_act), in enumerate(zip(episode_obs, episode_act)):
         # print(ep_idx)
@@ -232,11 +232,27 @@ def multilinear_polynomial_feature_expectation(episode_obs, episode_act, gamma, 
             #     np.array([feat[0] * feat[1], feat[0] * feat[2], feat[1] * feat[2], feat[0] * feat[1] * feat[2]])
             # ], axis=0)
             # assert current_features.shape == (7,)
-            current_features = np.concatenate([
-                feat * (feat[0] < 0.5).astype(np.int32),
-                feat * (1 - (feat[0] < 0.5).astype(np.int32))
-            ], axis=0)
-            assert current_features.shape == (6,)
+            # current_features = np.concatenate([
+            #     feat * (feat[0] < 0.5).astype(np.int32),
+            #     feat * (1 - (feat[0] < 0.5).astype(np.int32))
+            # ], axis=0)
+            # assert current_features.shape == (6,)
+            N = 3
+            piece_ranges = np.linspace(0, 1, N + 1)
+            current_features = []
+            for i in range(N):
+                for j in range(N):
+                    x_flag = (
+                        (feat[0] >= piece_ranges[i]).astype(np.int32) *
+                        (feat[0] < piece_ranges[i + 1]).astype(np.int32)
+                    )
+                    y_flag = (
+                        (feat[1] >= piece_ranges[j]).astype(np.int32) *
+                        (feat[1] < piece_ranges[j + 1]).astype(np.int32)
+                    )
+                    current_features.append(feat * x_flag * y_flag)
+            current_features = np.concatenate(current_features, axis=0)
+            assert current_features.shape == (3 * N * N,)
             if idx == 0:
                 successor_features = current_features
             else:
@@ -248,6 +264,130 @@ def multilinear_polynomial_feature_expectation(episode_obs, episode_act, gamma, 
 
     successor_features = sum_successor_features / n_episodes
     return successor_features
+
+
+def get_feature_expectation_raw(model, env, n_episodes=10):
+    # Retrieve the environment using the RL model
+    if env is None and isinstance(model, BaseRLModel):
+        env = model.get_env()
+
+    assert env is not None, "You must set the env in the model or pass it to the function."
+
+    is_vec_env = False
+    if isinstance(env, VecEnv) and not isinstance(env, _UnvecWrapper):
+        is_vec_env = True
+        if env.num_envs > 1:
+            warnings.warn("You are using multiple envs, only the data from the first one will be recorded.")
+
+    # Sanity check
+    assert (isinstance(env.observation_space, spaces.Box) or
+            isinstance(env.observation_space, spaces.Discrete)), "Observation space type not supported"
+
+    assert (isinstance(env.action_space, spaces.Box) or
+            isinstance(env.action_space, spaces.Discrete)), "Action space type not supported"
+
+    actions = []
+    observations = []
+    rewards = []
+    episode_returns = np.zeros((n_episodes,))
+
+    episode_starts = []
+    gamma = model.gamma
+
+    ep_idx = 0
+    h_step = 0
+    obs = env.reset()
+    episode_obs = []
+    episode_obs.append([])
+    episode_gammas = []
+    episode_gammas.append([])
+    episode_act = []
+    episode_act.append([])
+    episode_starts.append(True)
+    reward_sum = 0.0
+    idx = 0
+    # state and mask for recurrent policies
+    state, mask = None, None
+
+    if is_vec_env:
+        mask = [True for _ in range(env.num_envs)]
+
+    while ep_idx < n_episodes:
+        obs_ = obs[0] if is_vec_env else obs
+        observations.append(obs_)
+        episode_obs[ep_idx].append(obs_)
+
+        if isinstance(model, BaseRLModel):
+            action, state = model.predict(obs, state=state, mask=mask)
+        else:
+            action = model(obs)
+
+        obs, reward, done, _ = env.step(action)
+
+        # Use only first env
+        if is_vec_env:
+            mask = [done[0] for _ in range(env.num_envs)]
+            action = np.array([action[0]])
+            reward = np.array([reward[0]])
+            done = np.array([done[0]])
+
+        actions.append(action)
+        episode_gammas[ep_idx].append(gamma ** h_step)
+        episode_act[ep_idx].append(action)
+        rewards.append(reward)
+        episode_starts.append(done)
+        reward_sum += reward
+        idx += 1
+        h_step += 1
+        if done:
+            if not is_vec_env:
+                obs = env.reset()
+                # Reset the state in case of a recurrent policy
+                state = None
+            episode_returns[ep_idx] = reward_sum
+            reward_sum = 0.0
+            h_step = 0
+            ep_idx += 1
+            if ep_idx < n_episodes:
+                episode_obs.append([])
+                episode_act.append([])
+                episode_gammas.append([])
+
+
+
+    if isinstance(env.observation_space, spaces.Box):
+        observations = np.concatenate(observations).reshape((-1,) + env.observation_space.shape)
+    elif isinstance(env.observation_space, spaces.Discrete):
+        observations = np.array(observations).reshape((-1, 1))
+
+    if isinstance(env.action_space, spaces.Box):
+        actions = np.concatenate(actions).reshape((-1,) + env.action_space.shape)
+    elif isinstance(env.action_space, spaces.Discrete):
+        actions = np.array(actions).reshape((-1, 1))
+
+
+
+    for ep_idx, (ep_obs, ep_act), in enumerate(zip(episode_obs, episode_act)):
+        for idx, (obs, act) in enumerate(zip(reversed(ep_obs), reversed(ep_act))):
+            current_features = np.concatenate((obs, act), axis=0)
+            if idx == 0:
+                successor_features = (1-gamma) * current_features
+            else:
+                successor_features = np.add(gamma * successor_features, (1 - gamma) * current_features)
+        if ep_idx == 0:
+            sum_successor_features = successor_features
+        else:
+            sum_successor_features = np.add(sum_successor_features, successor_features)
+
+    successor_features = sum_successor_features / n_episodes
+
+    rewards = np.array(rewards)
+    episode_starts = np.array(episode_starts[:-1])
+
+    assert len(observations) == len(actions)
+
+    return successor_features, episode_obs, episode_act
+
 
 class Proj_MDPO_OFF(MDPO_OFF):
     """
@@ -357,7 +497,7 @@ class Proj(object):
             self.normalize_b = np.array([2./3., 0.5, 0.5], dtype=np.float32)
             assert is_action_features
             # self.normalize_s = np.array([1/1.2, 1/0.07, 1.], dtype=np.float32)
-            self.expert_feat_exp = multilinear_polynomial_feature_expectation(
+            self.expert_feat_exp = piecewise_feature_expectation(
                 expert_dataset.ep_obs, expert_dataset.ep_acs, kwargs['gamma'], self.normalize_s, self.normalize_b)
             # self.expert_feat_exp = self.expert_feat_exp * 0.5 + 0.5
         self.model = None
@@ -366,140 +506,18 @@ class Proj(object):
         if not os.path.exists(kwargs['tensorboard_log']):
             os.makedirs(kwargs['tensorboard_log'])
 
-    def get_feature_expectation_raw(self, model, env, n_episodes=10):
-        # Retrieve the environment using the RL model
-        if env is None and isinstance(model, BaseRLModel):
-            env = model.get_env()
-
-        assert env is not None, "You must set the env in the model or pass it to the function."
-
-        is_vec_env = False
-        if isinstance(env, VecEnv) and not isinstance(env, _UnvecWrapper):
-            is_vec_env = True
-            if env.num_envs > 1:
-                warnings.warn("You are using multiple envs, only the data from the first one will be recorded.")
-
-        # Sanity check
-        assert (isinstance(env.observation_space, spaces.Box) or
-                isinstance(env.observation_space, spaces.Discrete)), "Observation space type not supported"
-
-        assert (isinstance(env.action_space, spaces.Box) or
-                isinstance(env.action_space, spaces.Discrete)), "Action space type not supported"
-
-        actions = []
-        observations = []
-        rewards = []
-        episode_returns = np.zeros((n_episodes,))
-
-        episode_starts = []
-        gamma = model.gamma
-
-        ep_idx = 0
-        h_step = 0
-        obs = env.reset()
-        episode_obs = []
-        episode_obs.append([])
-        episode_gammas = []
-        episode_gammas.append([])
-        episode_act = []
-        episode_act.append([])
-        episode_starts.append(True)
-        reward_sum = 0.0
-        idx = 0
-        # state and mask for recurrent policies
-        state, mask = None, None
-
-        if is_vec_env:
-            mask = [True for _ in range(env.num_envs)]
-
-        while ep_idx < n_episodes:
-            obs_ = obs[0] if is_vec_env else obs
-            observations.append(obs_)
-            episode_obs[ep_idx].append(obs_)
-
-            if isinstance(model, BaseRLModel):
-                action, state = model.predict(obs, state=state, mask=mask)
-            else:
-                action = model(obs)
-
-            obs, reward, done, _ = env.step(action)
-
-            # Use only first env
-            if is_vec_env:
-                mask = [done[0] for _ in range(env.num_envs)]
-                action = np.array([action[0]])
-                reward = np.array([reward[0]])
-                done = np.array([done[0]])
-
-            actions.append(action)
-            episode_gammas[ep_idx].append(gamma ** h_step)
-            episode_act[ep_idx].append(action)
-            rewards.append(reward)
-            episode_starts.append(done)
-            reward_sum += reward
-            idx += 1
-            h_step += 1
-            if done:
-                if not is_vec_env:
-                    obs = env.reset()
-                    # Reset the state in case of a recurrent policy
-                    state = None
-                episode_returns[ep_idx] = reward_sum
-                reward_sum = 0.0
-                h_step = 0
-                ep_idx += 1
-                if ep_idx < n_episodes:
-                    episode_obs.append([])
-                    episode_act.append([])
-                    episode_gammas.append([])
-
-
-
-        if isinstance(env.observation_space, spaces.Box):
-            observations = np.concatenate(observations).reshape((-1,) + env.observation_space.shape)
-        elif isinstance(env.observation_space, spaces.Discrete):
-            observations = np.array(observations).reshape((-1, 1))
-
-        if isinstance(env.action_space, spaces.Box):
-            actions = np.concatenate(actions).reshape((-1,) + env.action_space.shape)
-        elif isinstance(env.action_space, spaces.Discrete):
-            actions = np.array(actions).reshape((-1, 1))
-
-
-
-        for ep_idx, (ep_obs, ep_act), in enumerate(zip(episode_obs, episode_act)):
-            for idx, (obs, act) in enumerate(zip(reversed(ep_obs), reversed(ep_act))):
-                current_features = np.concatenate((obs, act), axis=0)
-                if idx == 0:
-                    successor_features = (1-gamma) * current_features
-                else:
-                    successor_features = np.add(gamma * successor_features, (1 - gamma) * current_features)
-            if ep_idx == 0:
-                sum_successor_features = successor_features
-            else:
-                sum_successor_features = np.add(sum_successor_features, successor_features)
-
-        successor_features = sum_successor_features / n_episodes
-
-        rewards = np.array(rewards)
-        episode_starts = np.array(episode_starts[:-1])
-
-        assert len(observations) == len(actions)
-
-        return successor_features, episode_obs, episode_act
-
     def get_feature_expectation(self, model, env, n_episodes=10):
-        feat_exp, episode_obs, episode_act = self.get_feature_expectation_raw(model, env.envs[0].env, n_episodes)
+        feat_exp, episode_obs, episode_act = get_feature_expectation_raw(model, env.envs[0].env, n_episodes)
         if env.envs[0].spec.id == 'Pendulum-v0':
             feat_exp = feat_exp * 100 # gamma has to be 0.99. successor_features has extra * (1 - gamma)
             feat_exp = feat_exp[:-1] * self.normalize_s + self.normalize_b
         elif env.envs[0].spec.id == 'MountainCarContinuous-v0':
-            feat_exp = multilinear_polynomial_feature_expectation(
+            feat_exp = piecewise_feature_expectation(
                 np.array(episode_obs), np.array(episode_act), self.kwargs['gamma'], self.normalize_s, self.normalize_b)
             # feat_exp = feat_exp * 0.5 + 0.5
         return feat_exp
 
-    def learn(self, total_timesteps, num_proj_iters=10, callback=None, log_interval=2000, tb_log_name="Proj_MDPO_OFF",
+    def learn(self, total_timesteps, num_proj_iters=5, callback=None, log_interval=2000, tb_log_name="Proj_MDPO_OFF",
               reset_num_timesteps=True):
         assert self.expert_dataset is not None, "You must pass an expert dataset to Proj_MDPO_OFF for training"
 
@@ -675,150 +693,45 @@ class MWAL(object):
 
         self.expert_dataset = expert_dataset
         # self.normalize_s = np.array([1./2., 1./2., 1./16., 1./4.], dtype=np.float32)
-        assert not is_action_features
+        # assert not is_action_features
         if env.envs[0].spec.id == 'Pendulum-v0':
+            assert not is_action_features
             self.normalize_s = np.array([1./2., 1./2., 1./16.], dtype=np.float32)
             self.normalize_b = np.array([0.5, 0.5, 0.5], dtype=np.float32)
+            expert_feat_exp = self.expert_dataset.successor_features * 100 # gamma has to be 0.99. successor_features has extra * (1 - gamma)
+            self.expert_feat_exp = expert_feat_exp[:-1] * self.normalize_s + self.normalize_b
         elif env.envs[0].spec.id == 'MountainCarContinuous-v0':
-            self.normalize_s = np.array([1/1.8, 1/0.14], dtype=np.float32)
-            self.normalize_b = np.array([2./3., 0.5], dtype=np.float32)
-        expert_feat_exp = self.expert_dataset.successor_features * 100 # gamma has to be 0.99. successor_features has extra * (1 - gamma)
-        self.expert_feat_exp = expert_feat_exp[:-1] * self.normalize_s + self.normalize_b
+            self.normalize_s = np.array([1/1.8, 1/0.14, 1./2.], dtype=np.float32)
+            self.normalize_b = np.array([2./3., 0.5, 0.5], dtype=np.float32)
+            assert is_action_features
+            # self.normalize_s = np.array([1/1.2, 1/0.07, 1.], dtype=np.float32)
+            self.expert_feat_exp = piecewise_feature_expectation(
+                expert_dataset.ep_obs, expert_dataset.ep_acs, kwargs['gamma'], self.normalize_s, self.normalize_b)
+            # self.expert_feat_exp = self.expert_feat_exp * 0.5 + 0.5
+            # expert_feat_exp = self.expert_dataset.successor_features * 100 # gamma has to be 0.99. successor_features has extra * (1 - gamma)
+            # self.expert_feat_exp = expert_feat_exp * self.normalize_s + self.normalize_b
+        self.expert_feat_exp = np.concatenate([self.expert_feat_exp, -self.expert_feat_exp], axis=0)
         self.model = None
         self.alpha = None
         self.logdir = kwargs['tensorboard_log']
         if not os.path.exists(kwargs['tensorboard_log']):
             os.makedirs(kwargs['tensorboard_log'])
 
-    def get_feature_expectation_raw(self, model, env, n_episodes=10):
-        # Retrieve the environment using the RL model
-        if env is None and isinstance(model, BaseRLModel):
-            env = model.get_env()
-
-        assert env is not None, "You must set the env in the model or pass it to the function."
-
-        is_vec_env = False
-        if isinstance(env, VecEnv) and not isinstance(env, _UnvecWrapper):
-            is_vec_env = True
-            if env.num_envs > 1:
-                warnings.warn("You are using multiple envs, only the data from the first one will be recorded.")
-
-        # Sanity check
-        assert (isinstance(env.observation_space, spaces.Box) or
-                isinstance(env.observation_space, spaces.Discrete)), "Observation space type not supported"
-
-        assert (isinstance(env.action_space, spaces.Box) or
-                isinstance(env.action_space, spaces.Discrete)), "Action space type not supported"
-
-        actions = []
-        observations = []
-        rewards = []
-        episode_returns = np.zeros((n_episodes,))
-
-        episode_starts = []
-        gamma = model.gamma
-
-        ep_idx = 0
-        h_step = 0
-        obs = env.reset()
-        episode_obs = []
-        episode_obs.append([])
-        episode_gammas = []
-        episode_gammas.append([])
-        episode_act = []
-        episode_act.append([])
-        episode_starts.append(True)
-        reward_sum = 0.0
-        idx = 0
-        # state and mask for recurrent policies
-        state, mask = None, None
-
-        if is_vec_env:
-            mask = [True for _ in range(env.num_envs)]
-
-        while ep_idx < n_episodes:
-            obs_ = obs[0] if is_vec_env else obs
-            observations.append(obs_)
-            episode_obs[ep_idx].append(obs_)
-
-            if isinstance(model, BaseRLModel):
-                action, state = model.predict(obs, state=state, mask=mask)
-            else:
-                action = model(obs)
-
-            obs, reward, done, _ = env.step(action)
-
-            # Use only first env
-            if is_vec_env:
-                mask = [done[0] for _ in range(env.num_envs)]
-                action = np.array([action[0]])
-                reward = np.array([reward[0]])
-                done = np.array([done[0]])
-
-            actions.append(action)
-            episode_gammas[ep_idx].append(gamma ** h_step)
-            episode_act[ep_idx].append(action)
-            rewards.append(reward)
-            episode_starts.append(done)
-            reward_sum += reward
-            idx += 1
-            h_step += 1
-            if done:
-                if not is_vec_env:
-                    obs = env.reset()
-                    # Reset the state in case of a recurrent policy
-                    state = None
-                episode_returns[ep_idx] = reward_sum
-                reward_sum = 0.0
-                h_step = 0
-                ep_idx += 1
-                if ep_idx < n_episodes:
-                    episode_obs.append([])
-                    episode_act.append([])
-                    episode_gammas.append([])
-
-
-
-        if isinstance(env.observation_space, spaces.Box):
-            observations = np.concatenate(observations).reshape((-1,) + env.observation_space.shape)
-        elif isinstance(env.observation_space, spaces.Discrete):
-            observations = np.array(observations).reshape((-1, 1))
-
-        if isinstance(env.action_space, spaces.Box):
-            actions = np.concatenate(actions).reshape((-1,) + env.action_space.shape)
-        elif isinstance(env.action_space, spaces.Discrete):
-            actions = np.array(actions).reshape((-1, 1))
-
-
-
-        for ep_idx, (ep_obs, ep_act), in enumerate(zip(episode_obs, episode_act)):
-            for idx, (obs, act) in enumerate(zip(reversed(ep_obs), reversed(ep_act))):
-                current_features = np.concatenate((obs, act), axis=0)
-                if idx == 0:
-                    successor_features = (1-gamma) * current_features
-                else:
-                    successor_features = np.add(gamma * successor_features, (1 - gamma) * current_features)
-            if ep_idx == 0:
-                sum_successor_features = successor_features
-            else:
-                sum_successor_features = np.add(sum_successor_features, successor_features)
-
-        successor_features = sum_successor_features / n_episodes
-
-        rewards = np.array(rewards)
-        episode_starts = np.array(episode_starts[:-1])
-
-        assert len(observations) == len(actions)
-
-        return successor_features
-
     def get_feature_expectation(self, model, env, n_episodes=10):
-        feat_exp = self.get_feature_expectation_raw(model, env.envs[0].env, n_episodes)
-        feat_exp = feat_exp * 100 # gamma has to be 0.99. successor_features has extra * (1 - gamma)
-        feat_exp = feat_exp[:-1] * self.normalize_s + self.normalize_b
+        feat_exp, episode_obs, episode_act = get_feature_expectation_raw(model, env.envs[0].env, n_episodes)
+        if env.envs[0].spec.id == 'Pendulum-v0':
+            feat_exp = feat_exp * 100 # gamma has to be 0.99. successor_features has extra * (1 - gamma)
+            feat_exp = feat_exp[:-1] * self.normalize_s + self.normalize_b
+        elif env.envs[0].spec.id == 'MountainCarContinuous-v0':
+            feat_exp = piecewise_feature_expectation(
+                np.array(episode_obs), np.array(episode_act), self.kwargs['gamma'], self.normalize_s, self.normalize_b)
+            # feat_exp = feat_exp * 0.5 + 0.5
+            # feat_exp = feat_exp * 100 # gamma has to be 0.99. successor_features has extra * (1 - gamma)
+            # feat_exp = feat_exp * self.normalize_s + self.normalize_b
+        feat_exp = np.concatenate([feat_exp, -feat_exp], axis=0)
         return feat_exp
 
-    def learn(self, total_timesteps, T=40, callback=None, log_interval=2000, tb_log_name="MWAL_MDPO_OFF",
+    def learn(self, total_timesteps, T=5, callback=None, log_interval=2000, tb_log_name="MWAL_MDPO_OFF",
               reset_num_timesteps=True):
         assert self.expert_dataset is not None, "You must pass an expert dataset to MWAL_MDPO_OFF for training"
 
@@ -843,14 +756,15 @@ class MWAL(object):
             print('mwal iter:', i)
             # kwargs = copy.deepcopy(self.kwargs)
             # kwargs['tensorboard_log'] = os.path.join(kwargs['tensorboard_log'], 'iter%04d' % i)
-            if i > 1:
-                self.kwargs.update({'learning_starts': 0})
+            # if i > 1:
+            #     self.kwargs.update({'learning_starts': 0})
             model = MWAL_MDPO_OFF(**self.kwargs)
             model = self.load(os.path.join(self.logdir, 'iter%04d' % (i - 1)), model)
-            reward_vec = W / np.sum(W)
-            reward_vecs.append(reward_vec)
-            model.reward_giver.update_reward(reward_vec)
-            model.learn(total_timesteps // T, tb_log_name='iter%04d' % i)
+            if i > 1:
+                reward_vec = W / np.sum(W)
+                reward_vecs.append(reward_vec)
+                model.reward_giver.update_reward(reward_vec, False)
+                model.learn(total_timesteps // T, tb_log_name='iter%04d' % i)
             feat_exp = self.get_feature_expectation(model, env, 100)
             feat_exps.append(feat_exp)
             model.save(os.path.join(self.logdir, 'iter%04d' % i))
@@ -858,7 +772,7 @@ class MWAL(object):
             del model
             beta = 1 / (1 + np.sqrt(2 * np.log(np.shape(W)) / T))
             G = ((1 - gamma) * (feat_exp - self.expert_feat_exp) + 2 * np.ones(np.shape(W))) / 4
-            W = W * beta ** G
+            W = W * np.exp(np.log(beta) * G)
 
         policy_weights = np.ones(T) / T
 
