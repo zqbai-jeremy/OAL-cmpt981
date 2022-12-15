@@ -1089,9 +1089,9 @@ class ProjFWMethod(object):
         K.append(feat_exp)
 
         # Vertices set
-        S = []
+        S = [[] for i in range(num_proj_iters)]
         #S.append(np.array(feat_exp, dtype=np.float32))
-        S.append(feat_exp)
+        S[0].append(feat_exp)
 
         # Alphas is a dictionary contains coefficients of all the
         alphas = {}
@@ -1103,7 +1103,6 @@ class ProjFWMethod(object):
         gamma_list = []
 
         for i in range(1, num_proj_iters + 1):
-            new_S = []
             print('proj iter:', i)
 
             # MDPO can be replaced
@@ -1132,7 +1131,7 @@ class ProjFWMethod(object):
             d_FW = y_t - feat_exps_bar[-1]
 
             # Line 5 of ASCG algo
-            z_idx, z_t = self.linear_oracle(h_deriv, S)
+            z_idx, z_t = self.linear_oracle(h_deriv, S[i-1])
             d_AS = feat_exps_bar[-1] - z_t
             #print("z_t is {}".format(z_t))
 
@@ -1141,12 +1140,12 @@ class ProjFWMethod(object):
             d = 0
             gamma_max = 0
             # Line 6 - 10
-            if np.dot(h_deriv, d_FW) < np.dot(h_deriv, d_AS):
+            if np.dot(h_deriv, d_FW) <= np.dot(h_deriv, d_AS):
                 FW_step = True
                 d = d_FW
                 gamma_max = 1
             else:
-                FW_step = False
+                #FW_step = False
                 d = d_AS
                 if alphas[repr(list(np.array(z_t, dtype=np.float32)))] == 1:
                     gamma_max = 100
@@ -1165,47 +1164,61 @@ class ProjFWMethod(object):
             # Update representation
             if FW_step:
                 if gamma_t == 1:
-                    new_S = [y_t]
+                    #new_S = [y_t]
+                    S[i] = [y_t]
+                    # Empty the dictionary
+                    alphas = {}
+                    # Only one element should be here
                     alphas[repr(list(np.array(y_t, dtype=np.float32)))] = 1
                 else:
-                    #print(alphas)
-                    #print("y_t is {}".format(list(np.array(y_t, dtype=np.float32))))
-                    if repr(list(np.array(y_t, dtype=np.float32))) not in alphas:
-                        alphas[repr(list(np.array(y_t, dtype=np.float32)))] = 1.0
-                    alphas[repr(list(np.array(y_t, dtype=np.float32)))] = (1 - gamma_t) * alphas[repr(list(np.array(y_t, dtype=np.float32)))] + gamma_t
-                    for idx, y in enumerate(S):
-                        alphas[repr(list(np.array(y, dtype=np.float32)))] = (1 - gamma_t) * alphas[repr(list(np.array(y, dtype=np.float32)))]
-                    S.append(y_t)
-                    new_S = S
+                    if y_t not in S[i-1]:
+                        alphas[repr(list(np.array(y_t, dtype=np.float32)))] = gamma_t
+                    else: # y_t exists in the set
+                        alphas[repr(list(np.array(y_t, dtype=np.float32)))] = (1 - gamma_t) * alphas[repr(list(np.array(y_t, dtype=np.float32)))] + gamma_t
+
+                    # For all other entries not y_t
+                    for idx, y in enumerate(S[i-1]):
+                        if y != y_t:
+                            alphas[repr(list(np.array(y, dtype=np.float32)))] = (1 - gamma_t) * alphas[repr(list(np.array(y, dtype=np.float32)))]
+                    # S[].append(y_t)
+                    S[i] = S[i-1]
+                    if y_t not in S[i-1]:
+                        S[i].append(y_t)
             # Away step
             else:
                 if gamma_t == gamma_max:
-                    print("I'm here")
-                    print(S)
+                    # print("I'm here")
+                    # print(S)
                     # A little hack here, to avoid an empty S set
                     if len(S) != 1:
-                        S.pop(z_idx)
-                    new_S = S
-                #print(alphas)
+                        S[i-1].pop(z_idx)
+                    S[i] = S[i-1]
+                    # Need to update the weights here
+                    normalize_coeff = (1- alphas[repr(list(np.array(z_t, dtype=np.float32)))])
+                    # Also pop z_t coefficient out of the set too
+                    del alphas[repr(list(np.array(z_t, dtype=np.float32)))]
+                    assert alphas[repr(list(np.array(z_t, dtype=np.float32)))] not in alphas
+
+                     # Normalize the rest of the alpha elements
+                    for k, v in alphas.items():
+                        alphas[k] = v/normalize_coeff
                 else:
-                    if repr(list(np.array(z_t, dtype=np.float32))) not in alphas:
-                        alphas[repr(list(np.array(z_t, dtype=np.float32)))] = 1.0
+                    # if repr(list(np.array(z_t, dtype=np.float32))) not in alphas:
+                    #     alphas[repr(list(np.array(z_t, dtype=np.float32)))] = 1.0
 
-                    alphas[repr(list(np.array(z_t, dtype=np.float32)))] = (1 - gamma_t) * alphas[repr(list(np.array(z_t, dtype=np.float32)))] - gamma_t
-                    for idx, y in enumerate(S):
-                        alphas[repr(list(np.array(y, dtype=np.float32)))] = (1 + gamma_t) * alphas[repr(list(np.array(y, dtype=np.float32)))]
-                    new_S = S
-
-            # Assign previous
-            S = new_S
+                    alphas[repr(list(np.array(z_t, dtype=np.float32)))] = (1 + gamma_t) * alphas[repr(list(np.array(z_t, dtype=np.float32)))] - gamma_t
+                    for idx, y in enumerate(S[i-1]):
+                        if y != z_t:
+                            alphas[repr(list(np.array(y, dtype=np.float32)))] = (1 + gamma_t) * alphas[repr(list(np.array(y, dtype=np.float32)))]
+                    S[i] = S[i-1]
 
             # Update the mixture policy
-            policy_weight_pre = np.concatenate([policy_weights[-1], np.array([0.], dtype=np.float32)], axis=0)
-            policy_weight_i = np.zeros((i + 1,), dtype=np.float32)
-            policy_weight_i[-1] = 1
-            assert policy_weight_pre.shape == policy_weight_i.shape
-            policy_weight = policy_weight_pre + gamma_t * (policy_weight_i - policy_weight_pre)
-            policy_weights.append(policy_weight)
+            # policy_weight_pre = np.concatenate([policy_weights[-1], np.array([0.], dtype=np.float32)], axis=0)
+            # policy_weight_i = np.zeros((i + 1,), dtype=np.float32)
+            # policy_weight_i[-1] = 1
+            # assert policy_weight_pre.shape == policy_weight_i.shape
+            # policy_weight = policy_weight_pre + gamma_t * (policy_weight_i - policy_weight_pre)
+            # policy_weights.append(policy_weight)
 
             print("Difference compared to expert {}".format(LA.norm(feat_exp_bar - self.expert_feat_exp, 2 )))
             diff_results.append(LA.norm(feat_exp_bar - self.expert_feat_exp, 2))
