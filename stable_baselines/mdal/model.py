@@ -1147,11 +1147,11 @@ class ProjFWMethod(object):
             else:
                 #FW_step = False
                 d = d_AS
-                if alphas[repr(list(np.array(z_t, dtype=np.float32)))] == 1:
-                    gamma_max = 100
-                else:
-                    gamma_max = alphas[repr(list(np.array(z_t, dtype=np.float32)))] / (1 - alphas[repr(list(np.array(z_t, dtype=np.float32)))])
-                    print(gamma_max)
+                # if alphas[repr(list(np.array(z_t, dtype=np.float32)))] == 1:
+                #     gamma_max = 100
+                # else:
+                gamma_max = alphas[repr(list(np.array(z_t, dtype=np.float32)))] / (1 - alphas[repr(list(np.array(z_t, dtype=np.float32)))])
+                print(gamma_max)
 
             # Line search
             gamma_t = self.linesearch(feat_exps_bar[-1], gamma_max, d)
@@ -1219,6 +1219,16 @@ class ProjFWMethod(object):
             # assert policy_weight_pre.shape == policy_weight_i.shape
             # policy_weight = policy_weight_pre + gamma_t * (policy_weight_i - policy_weight_pre)
             # policy_weights.append(policy_weight)
+
+            # Empty the policy weight
+            policy_weights = []
+            # Now use the alphas to update the policy weights
+            for i, feat_e in enumerate(feat_exp):
+                if feat_e in S[num_proj_iters - 1]:
+                    # Look up its corresponding alphas
+                    policy_weights[i] = alphas[repr(list(np.array(feat_e, dtype=np.float32)))]
+                else:
+                    policy_weights[i] = 0
 
             print("Difference compared to expert {}".format(LA.norm(feat_exp_bar - self.expert_feat_exp, 2 )))
             diff_results.append(LA.norm(feat_exp_bar - self.expert_feat_exp, 2))
