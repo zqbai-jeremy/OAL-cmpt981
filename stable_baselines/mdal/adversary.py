@@ -1318,9 +1318,9 @@ class LinearReward(object):
         # self.normalize_s = np.array([1./2., 1./2., 1./16., 1./2.], dtype=np.float32) # MLP output action is in [-1, 1]
         # assert not is_action_features
         if env.envs[0].spec.id == 'Pendulum-v0':
-            assert not is_action_features
-            self.normalize_s = np.array([1./2., 1./2., 1./16.], dtype=np.float32)
-            self.normalize_b = np.array([0.5, 0.5, 0.5], dtype=np.float32)
+            assert is_action_features
+            self.normalize_s = np.array([1./2., 1./2., 1./16., 1./2.], dtype=np.float32)
+            self.normalize_b = np.array([0.5, 0.5, 0.5, 0.5], dtype=np.float32)
             self.reward_vec = np.zeros((self.n_features, ), dtype=np.float32)
         elif env.envs[0].spec.id == 'MountainCarContinuous-v0':
             self.normalize_s = np.array([1/1.8, 1/0.14, 1./2.], dtype=np.float32)
@@ -1336,10 +1336,10 @@ class LinearReward(object):
             self.n_features = 3 * N * N
             # For PROJ --------------------------------------------------
 
-        # For MWAL --------------------------------------------------
-        self.n_features *= 2
-        self.reward_vec = np.zeros((self.n_features, ), dtype=np.float32)
-        # For MWAL --------------------------------------------------
+        # # For MWAL --------------------------------------------------
+        # self.n_features *= 2
+        # self.reward_vec = np.zeros((self.n_features, ), dtype=np.float32)
+        # # For MWAL --------------------------------------------------
 
         self.env_id = env.envs[0].spec.id
 
@@ -1408,9 +1408,9 @@ class LinearReward(object):
             assert features.shape == (obs.shape[0], 3 * N * N)
             # For PROJ --------------------------------------------------
 
-        # For MWAL --------------------------------------------------
-        features = np.concatenate([features, -features], axis=1)
-        # For MWAL --------------------------------------------------
+        # # For MWAL --------------------------------------------------
+        # features = np.concatenate([features, -features], axis=1)
+        # # For MWAL --------------------------------------------------
 
         # print('features:', np.amin(features), np.amax(features))
 

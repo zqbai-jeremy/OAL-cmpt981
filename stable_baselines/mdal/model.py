@@ -7,9 +7,11 @@ from typing import Dict
 import copy
 import pickle
 
+import csv
 import cv2  # pytype:disable=import-error
 import numpy as np
 from gym import spaces
+from tqdm import tqdm
 
 from stable_baselines.common.base_class import BaseRLModel
 from stable_baselines.common.vec_env import VecEnv, VecFrameStack
@@ -386,7 +388,7 @@ def get_feature_expectation_raw(model, env, n_episodes=10):
 
     assert len(observations) == len(actions)
 
-    return successor_features, episode_obs, episode_act
+    return successor_features, episode_obs, episode_act, episode_returns
 
 
 class Proj_MDPO_OFF(MDPO_OFF):
@@ -487,11 +489,11 @@ class Proj(object):
         # self.normalize_s = np.array([1./2., 1./2., 1./16., 1./4.], dtype=np.float32)
         # assert not is_action_features
         if env.envs[0].spec.id == 'Pendulum-v0':
-            assert not is_action_features
-            self.normalize_s = np.array([1./2., 1./2., 1./16.], dtype=np.float32)
-            self.normalize_b = np.array([0.5, 0.5, 0.5], dtype=np.float32)
+            assert is_action_features
+            self.normalize_s = np.array([1./2., 1./2., 1./16., 1./4.], dtype=np.float32)
+            self.normalize_b = np.array([0.5, 0.5, 0.5, 0.5], dtype=np.float32)
             expert_feat_exp = self.expert_dataset.successor_features * 100 # gamma has to be 0.99. successor_features has extra * (1 - gamma)
-            self.expert_feat_exp = expert_feat_exp[:-1] * self.normalize_s + self.normalize_b
+            self.expert_feat_exp = expert_feat_exp * self.normalize_s + self.normalize_b
         elif env.envs[0].spec.id == 'MountainCarContinuous-v0':
             self.normalize_s = np.array([1/1.8, 1/0.14, 1./2.], dtype=np.float32)
             self.normalize_b = np.array([2./3., 0.5, 0.5], dtype=np.float32)
@@ -507,17 +509,17 @@ class Proj(object):
             os.makedirs(kwargs['tensorboard_log'])
 
     def get_feature_expectation(self, model, env, n_episodes=10):
-        feat_exp, episode_obs, episode_act = get_feature_expectation_raw(model, env.envs[0].env, n_episodes)
+        feat_exp, episode_obs, episode_act, _ = get_feature_expectation_raw(model, env.envs[0].env, n_episodes)
         if env.envs[0].spec.id == 'Pendulum-v0':
             feat_exp = feat_exp * 100 # gamma has to be 0.99. successor_features has extra * (1 - gamma)
-            feat_exp = feat_exp[:-1] * self.normalize_s + self.normalize_b
+            feat_exp = feat_exp * self.normalize_s + self.normalize_b
         elif env.envs[0].spec.id == 'MountainCarContinuous-v0':
             feat_exp = piecewise_feature_expectation(
                 np.array(episode_obs), np.array(episode_act), self.kwargs['gamma'], self.normalize_s, self.normalize_b)
             # feat_exp = feat_exp * 0.5 + 0.5
         return feat_exp
 
-    def learn(self, total_timesteps, num_proj_iters=5, callback=None, log_interval=2000, tb_log_name="Proj_MDPO_OFF",
+    def learn(self, total_timesteps, num_proj_iters=6, callback=None, log_interval=2000, tb_log_name="Proj_MDPO_OFF",
               reset_num_timesteps=True):
         assert self.expert_dataset is not None, "You must pass an expert dataset to Proj_MDPO_OFF for training"
 
@@ -594,6 +596,37 @@ class Proj(object):
         model = Proj_MDPO_OFF(**self.kwargs)
         model = self.load(load_path, model)
         return model
+
+    def select_mixed_policy(self, logdir, iter, model):
+        with open(os.path.join(logdir, 'data.pkl'), 'rb') as f:
+            data = pickle.load(f)
+            policy_weights = data['policy_weights'][iter]
+        assert policy_weights.shape[0] == iter + 1
+        idx = np.random.choice(np.arange(policy_weights.shape[0]), p=policy_weights)
+        return self.load(os.path.join(logdir, 'iter%04d.zip' % idx), model)
+
+    def test(self, logdir, outdir, total_timesteps, num_iters):
+        env = self.kwargs['env']
+        model = Proj_MDPO_OFF(**self.kwargs)
+        steps = []
+        rewards = []
+        for i in tqdm(range(0, num_iters + 1)):
+            steps.append(total_timesteps // num_iters if i > 0 else 0)
+            ep_rewards = []
+            model = self.load(os.path.join(logdir, 'iter%04d.zip' % i), model)
+            for j in range(100):
+                # model = self.select_mixed_policy(logdir, i, model)
+                _, _, _, ep_reward = get_feature_expectation_raw(model, env.envs[0].env, 1)
+                ep_rewards.append(ep_reward[0])
+            rewards.append(np.mean(np.array(ep_rewards)))
+        assert len(steps) == len(rewards)
+
+        with open(os.path.join(outdir, 'test.csv'), 'w') as f:
+            logger = csv.DictWriter(f, fieldnames=('r', 'l'))
+            logger.writeheader()
+            for i in range(len(steps)):
+                ep_info = {"r": round(rewards[i], 6), "l": steps[i]}
+                logger.writerow(ep_info)
 
 
 class MWAL_MDPO_OFF(MDPO_OFF):
@@ -695,11 +728,11 @@ class MWAL(object):
         # self.normalize_s = np.array([1./2., 1./2., 1./16., 1./4.], dtype=np.float32)
         # assert not is_action_features
         if env.envs[0].spec.id == 'Pendulum-v0':
-            assert not is_action_features
-            self.normalize_s = np.array([1./2., 1./2., 1./16.], dtype=np.float32)
-            self.normalize_b = np.array([0.5, 0.5, 0.5], dtype=np.float32)
+            assert is_action_features
+            self.normalize_s = np.array([1./2., 1./2., 1./16., 1./4.], dtype=np.float32)
+            self.normalize_b = np.array([0.5, 0.5, 0.5, 0.5], dtype=np.float32)
             expert_feat_exp = self.expert_dataset.successor_features * 100 # gamma has to be 0.99. successor_features has extra * (1 - gamma)
-            self.expert_feat_exp = expert_feat_exp[:-1] * self.normalize_s + self.normalize_b
+            self.expert_feat_exp = expert_feat_exp * self.normalize_s + self.normalize_b
         elif env.envs[0].spec.id == 'MountainCarContinuous-v0':
             self.normalize_s = np.array([1/1.8, 1/0.14, 1./2.], dtype=np.float32)
             self.normalize_b = np.array([2./3., 0.5, 0.5], dtype=np.float32)
@@ -718,10 +751,10 @@ class MWAL(object):
             os.makedirs(kwargs['tensorboard_log'])
 
     def get_feature_expectation(self, model, env, n_episodes=10):
-        feat_exp, episode_obs, episode_act = get_feature_expectation_raw(model, env.envs[0].env, n_episodes)
+        feat_exp, episode_obs, episode_act, _ = get_feature_expectation_raw(model, env.envs[0].env, n_episodes)
         if env.envs[0].spec.id == 'Pendulum-v0':
             feat_exp = feat_exp * 100 # gamma has to be 0.99. successor_features has extra * (1 - gamma)
-            feat_exp = feat_exp[:-1] * self.normalize_s + self.normalize_b
+            feat_exp = feat_exp * self.normalize_s + self.normalize_b
         elif env.envs[0].spec.id == 'MountainCarContinuous-v0':
             feat_exp = piecewise_feature_expectation(
                 np.array(episode_obs), np.array(episode_act), self.kwargs['gamma'], self.normalize_s, self.normalize_b)
@@ -731,7 +764,7 @@ class MWAL(object):
         feat_exp = np.concatenate([feat_exp, -feat_exp], axis=0)
         return feat_exp
 
-    def learn(self, total_timesteps, T=5, callback=None, log_interval=2000, tb_log_name="MWAL_MDPO_OFF",
+    def learn(self, total_timesteps, T=7, callback=None, log_interval=2000, tb_log_name="MWAL_MDPO_OFF",
               reset_num_timesteps=True):
         assert self.expert_dataset is not None, "You must pass an expert dataset to MWAL_MDPO_OFF for training"
 
@@ -786,6 +819,33 @@ class MWAL(object):
         data, params = model._load_from_file(load_path)
         model.load_parameters(params)
         return model
+
+    def select_mixed_policy(self, logdir, iter, model):
+        idx = np.random.choice(np.arange(iter - 1)) + 2
+        return self.load(os.path.join(logdir, 'iter%04d.zip' % idx), model)
+
+    def test(self, logdir, outdir, total_timesteps, num_iters):
+        env = self.kwargs['env']
+        model = MWAL_MDPO_OFF(**self.kwargs)
+        steps = []
+        rewards = []
+        for i in tqdm(range(1, num_iters + 1)):
+            steps.append(total_timesteps // num_iters if i > 1 else 0)
+            ep_rewards = []
+            model = self.load(os.path.join(logdir, 'iter%04d.zip' % i), model)
+            for j in range(100):
+                # model = self.select_mixed_policy(logdir, i, model)
+                _, _, _, ep_reward = get_feature_expectation_raw(model, env.envs[0].env, 1)
+                ep_rewards.append(ep_reward[0])
+            rewards.append(np.mean(np.array(ep_rewards)))
+        assert len(steps) == len(rewards)
+
+        with open(os.path.join(outdir, 'test.csv'), 'w') as f:
+            logger = csv.DictWriter(f, fieldnames=('r', 'l'))
+            logger.writeheader()
+            for i in range(len(steps)):
+                ep_info = {"r": round(rewards[i], 6), "l": steps[i]}
+                logger.writerow(ep_info)
 
 
 class ProjFWMethod(object):

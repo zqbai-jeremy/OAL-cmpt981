@@ -31,6 +31,7 @@ def test(env_id, algo, num_timesteps, seed, sgd_steps, t_pi, t_c, lam, log, expe
 
         env = DummyVecEnv([make_env])
 
+        expert_path = './experts/' + expert_path
         expert_path = expert_path + '.npz'
         dataset = ExpertDataset(expert_path=expert_path, traj_limitation=2000, verbose=1)
 
@@ -43,19 +44,43 @@ def test(env_id, algo, num_timesteps, seed, sgd_steps, t_pi, t_c, lam, log, expe
                                     exploration_bonus=exploration_bonus, bonus_coef=bonus_coef,
                                     is_action_features=is_action_features,
                                     neural=neural, lipschitz=lipschitz)
+        elif algo == 'PROJ':
+            model = Proj('MlpPolicy', env, dataset, verbose=1,
+                                    tensorboard_log="./experiments_test/" + env_name + "/proj/", seed=seed,
+                                    buffer_size=1000000, ent_coef=0.0, learning_starts=10000, batch_size=256, tau=0.01,
+                                    gamma=0.99, gradient_steps=sgd_steps, mdpo_update_steps=mdpo_update_steps,
+                                    lam=0.0, train_freq=1, d_step=10, tsallis_q=1, reparameterize=True, t_pi=t_pi, t_c=t_c,
+                                    exploration_bonus=exploration_bonus, bonus_coef=bonus_coef,
+                                    is_action_features=is_action_features,
+                                    neural=neural, lipschitz=lipschitz, mdpSolver=mdpSolver)
+            logdir = "./experiments/" + env_name + "/proj/"
+            num_iters = 6
+        elif algo == 'MWAL':
+            model = MWAL('MlpPolicy', env, dataset, verbose=1,
+                                    tensorboard_log="./experiments_test/" + env_name + "/mwal/", seed=seed,
+                                    buffer_size=1000000, ent_coef=0.0, learning_starts=10000, batch_size=256, tau=0.01,
+                                    gamma=0.99, gradient_steps=sgd_steps, mdpo_update_steps=mdpo_update_steps,
+                                    lam=0.0, train_freq=1, d_step=10, tsallis_q=1, reparameterize=True, t_pi=t_pi, t_c=t_c,
+                                    exploration_bonus=exploration_bonus, bonus_coef=bonus_coef,
+                                    is_action_features=is_action_features,
+                                    neural=neural, lipschitz=lipschitz)
+            logdir = "./experiments/" + env_name + "/mwal/"
+            num_iters = 7
         elif algo == 'PROJ_FW':
-                model = ProjFWMethod('MlpPolicy', env, dataset, verbose=1,
-                                      tensorboard_log="./experiments_test/" + env_name + "/proj_fw/", seed=seed,
-                                      buffer_size=1000000, ent_coef=0.0, learning_starts=10000, batch_size=256, tau=0.01,
-                                      gamma=0.99, gradient_steps=sgd_steps, mdpo_update_steps=mdpo_update_steps,
-                                      lam=0.0, train_freq=1, d_step=10, tsallis_q=1, reparameterize=True, t_pi=t_pi, t_c=t_c,
-                                      exploration_bonus=exploration_bonus, bonus_coef=bonus_coef,
-                                      is_action_features=is_action_features,
-                                      neural=neural, lipschitz=lipschitz)
+            model = ProjFWMethod('MlpPolicy', env, dataset, verbose=1,
+                                    tensorboard_log="./experiments_test/" + env_name + "/proj_fw/", seed=seed,
+                                    buffer_size=1000000, ent_coef=0.0, learning_starts=10000, batch_size=256, tau=0.01,
+                                    gamma=0.99, gradient_steps=sgd_steps, mdpo_update_steps=mdpo_update_steps,
+                                    lam=0.0, train_freq=1, d_step=10, tsallis_q=1, reparameterize=True, t_pi=t_pi, t_c=t_c,
+                                    exploration_bonus=exploration_bonus, bonus_coef=bonus_coef,
+                                    is_action_features=is_action_features,
+                                    neural=neural, lipschitz=lipschitz)
         elif algo == 'SAC':
             from stable_baselines import SAC
             env = VecNormalize(env, norm_reward=False, norm_obs=False)
             model = SAC.load(expert_model, env)
+
+        model.test(logdir, logdir, num_timesteps, num_iters)
 
 
 if __name__ == '__main__':
@@ -66,7 +91,7 @@ if __name__ == '__main__':
     log = not args.no_log
     is_action_features = not args.states
 
-    test(args.env, algo=args.algo, num_timesteps=args.num_timesteps, seed=(seed+args.seed_offset),
+    test(args.env, algo=args.algo, num_timesteps=args.num_timesteps, seed=args.seed_offset,
         expert_model=args.expert_model, expert_path=args.expert_path, num_trajectories=args.num_trajectories,
         is_action_features=is_action_features,
         sgd_steps=args.sgd_steps, mdpo_update_steps=args.mdpo_update_steps, lipschitz=args.lipschitz,
