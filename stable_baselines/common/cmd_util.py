@@ -211,6 +211,7 @@ def mujoco_arg_parser():
     parser.add_argument('--states', default=False, action='store_true')
     parser.add_argument('--dir-name', type=str, default='')
     parser.add_argument('--neural', default=False, action='store_true')
+    parser.add_argument('--away-step', default=False, action='store_true')
 
 
 

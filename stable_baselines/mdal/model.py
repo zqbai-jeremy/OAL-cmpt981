@@ -853,7 +853,7 @@ class ProjFWMethod(object):
                  hidden_size_adversary=100, adversary_entcoeff=0, timesteps_per_batch=2000,
                  g_step=1, d_step=10, d_stepsize=3e-4, verbose=0,
                  _init_setup_model=True, exploration_bonus=False, bonus_coef=0.01, is_action_features=True,
-                  neural=False, lipschitz=1.0, mdpSolver=None, **kwargs):
+                  neural=False, lipschitz=1.0, away_step=False, mdpSolver=None, **kwargs):
         self.kwargs = {
             'policy': policy,
             'env': env,
@@ -875,6 +875,7 @@ class ProjFWMethod(object):
         self.kwargs.update(kwargs)
         self.mdpSolver = mdpSolver
         self.expert_dataset = expert_dataset
+        self.away_step = away_step
         # self.normalize_s = np.array([1./2., 1./2., 1./16., 1./4.], dtype=np.float32)
         #assert not is_action_features
         if env.envs[0].spec.id == 'Pendulum-v0':
@@ -966,8 +967,8 @@ class ProjFWMethod(object):
 
         #return gamma
 
-    def learn(self, total_timesteps, num_proj_iters=10, callback=None, log_interval=2000, tb_log_name="Proj_MDPO_OFF",
-              reset_num_timesteps=True):
+    # FW away step
+    def FWAS(self, total_timesteps, num_proj_iters=10):
         assert self.expert_dataset is not None, "You must pass an expert dataset to Proj_MDPO_OFF for training"
 
         feat_exps_bar = []
@@ -995,8 +996,8 @@ class ProjFWMethod(object):
         K.append(feat_exp)
 
         # Vertices set
-        S = [[] for i in range(num_proj_iters+1)]
-        #S.append(np.array(feat_exp, dtype=np.float32))
+        S = [[] for i in range(num_proj_iters + 1)]
+        # S.append(np.array(feat_exp, dtype=np.float32))
         S[0].append(feat_exp)
 
         # Alphas is a dictionary contains coefficients of all the
@@ -1038,7 +1039,7 @@ class ProjFWMethod(object):
             print("d_FW is {}".format(d_FW))
 
             # Line 5 of ASCG algo
-            z_idx, z_t = self.linear_oracle(h_deriv, S[i-1])
+            z_idx, z_t = self.linear_oracle(h_deriv, S[i - 1])
             d_AS = feat_exps_bar[-1] - z_t
             print("d_AS is {}".format(d_AS))
 
@@ -1053,19 +1054,20 @@ class ProjFWMethod(object):
                 gamma_max = 1
                 print("Doing FW step {}".format(d_FW))
             else:
-                #FW_step = False
+                # FW_step = False
                 d = d_AS
                 print("Doing Away step {}".format(d_AS))
                 # if alphas[repr(list(np.array(z_t, dtype=np.float32)))] == 1:
                 #     gamma_max = 100
                 # else:
-                gamma_max = alphas[repr(list(np.array(z_t, dtype=np.float32)))] / (1 - alphas[repr(list(np.array(z_t, dtype=np.float32)))])
+                gamma_max = alphas[repr(list(np.array(z_t, dtype=np.float32)))] / (
+                            1 - alphas[repr(list(np.array(z_t, dtype=np.float32)))])
                 print(gamma_max)
 
             # Line search
             gamma_t = self.linesearch(feat_exps_bar[-1], gamma_max, d)
             print("gamma is {}".format(gamma_t))
-            #print()
+            # print()
             # Update
             feat_exp_bar = feat_exp + gamma_t * d
             gamma_list.append(gamma_t)
@@ -1074,7 +1076,7 @@ class ProjFWMethod(object):
             # Update representation
             if FW_step:
                 if gamma_t == 1:
-                    #new_S = [y_t]
+                    # new_S = [y_t]
                     S[i] = [y_t]
                     # Empty the dictionary
                     alphas.clear()
@@ -1085,15 +1087,17 @@ class ProjFWMethod(object):
                     if repr(list(np.array(y_t, dtype=np.float32))) not in alphas:
                         alphas[repr(list(np.array(y_t, dtype=np.float32)))] = gamma_t
                         add_new_pt = True
-                    else: # y_t exists in the set
-                        alphas[repr(list(np.array(y_t, dtype=np.float32)))] = (1 - gamma_t) * alphas[repr(list(np.array(y_t, dtype=np.float32)))] + gamma_t
+                    else:  # y_t exists in the set
+                        alphas[repr(list(np.array(y_t, dtype=np.float32)))] = (1 - gamma_t) * alphas[
+                            repr(list(np.array(y_t, dtype=np.float32)))] + gamma_t
 
                     # For all other entries not y_t
-                    for idx, y in enumerate(S[i-1]):
+                    for idx, y in enumerate(S[i - 1]):
                         if repr(list(np.array(y, dtype=np.float32))) != repr(list(np.array(y_t, dtype=np.float32))):
-                            alphas[repr(list(np.array(y, dtype=np.float32)))] = (1 - gamma_t) * alphas[repr(list(np.array(y, dtype=np.float32)))]
+                            alphas[repr(list(np.array(y, dtype=np.float32)))] = (1 - gamma_t) * alphas[
+                                repr(list(np.array(y, dtype=np.float32)))]
                     # S[].append(y_t)
-                    S[i] = S[i-1]
+                    S[i] = S[i - 1]
                     if add_new_pt:
                         S[i].append(y_t)
             # Away step
@@ -1103,31 +1107,33 @@ class ProjFWMethod(object):
                     # print(S)
                     # A little hack here, to avoid an empty S set
                     if len(S) != 1:
-                        S[i-1].pop(z_idx)
-                    S[i] = S[i-1]
+                        S[i - 1].pop(z_idx)
+                    S[i] = S[i - 1]
                     # Need to update the weights here
-                    normalize_coeff = (1- alphas[repr(list(np.array(z_t, dtype=np.float32)))])
+                    normalize_coeff = (1 - alphas[repr(list(np.array(z_t, dtype=np.float32)))])
                     # Also pop z_t coefficient out of the set too
                     del alphas[repr(list(np.array(z_t, dtype=np.float32)))]
                     assert alphas[repr(list(np.array(z_t, dtype=np.float32)))] not in alphas
 
-                     # Normalize the rest of the alpha elements
+                    # Normalize the rest of the alpha elements
                     for k, v in alphas.items():
-                        alphas[k] = v/normalize_coeff
+                        alphas[k] = v / normalize_coeff
                 else:
                     # if repr(list(np.array(z_t, dtype=np.float32))) not in alphas:
                     #     alphas[repr(list(np.array(z_t, dtype=np.float32)))] = 1.0
 
-                    alphas[repr(list(np.array(z_t, dtype=np.float32)))] = (1 + gamma_t) * alphas[repr(list(np.array(z_t, dtype=np.float32)))] - gamma_t
-                    for idx, y in enumerate(S[i-1]):
+                    alphas[repr(list(np.array(z_t, dtype=np.float32)))] = (1 + gamma_t) * alphas[
+                        repr(list(np.array(z_t, dtype=np.float32)))] - gamma_t
+                    for idx, y in enumerate(S[i - 1]):
                         if repr(list(np.array(y, dtype=np.float32))) != repr(list(np.array(z_t, dtype=np.float32))):
-                            alphas[repr(list(np.array(y, dtype=np.float32)))] = (1 + gamma_t) * alphas[repr(list(np.array(y, dtype=np.float32)))]
-                    S[i] = S[i-1]
+                            alphas[repr(list(np.array(y, dtype=np.float32)))] = (1 + gamma_t) * alphas[
+                                repr(list(np.array(y, dtype=np.float32)))]
+                    S[i] = S[i - 1]
             print("Set representation S[{}] is {}".format(i, S[i]))
             print("Alphas is {}".format(alphas))
             print("Weight coefficients are {}".format(alphas))
 
-            print("Difference compared to expert {}".format(LA.norm(feat_exp_bar - self.expert_feat_exp, 2 )))
+            print("Difference compared to expert {}".format(LA.norm(feat_exp_bar - self.expert_feat_exp, 2)))
             diff_results.append(LA.norm(feat_exp_bar - self.expert_feat_exp, 2))
 
             # Update the mixture policy
@@ -1156,6 +1162,79 @@ class ProjFWMethod(object):
         print("gamma list {}".format(gamma_list))
         with open(os.path.join(self.logdir, 'data.pkl'), 'wb') as f:
             pickle.dump({'feat_exps_bar': feat_exps_bar, 'policy_weights': policy_weights, 'feat_exps': feat_exps}, f)
+
+    def FW(self, total_timesteps, num_proj_iters=10):
+        assert self.expert_dataset is not None, "You must pass an expert dataset to Proj_MDPO_OFF for training"
+
+        feat_exps_bar = []
+        feat_exps = []
+        ts = []
+        policy_weights = []
+        env = self.kwargs['env']
+        diff_results = []
+
+
+        # Initialize
+        # kwargs = copy.deepcopy(self.kwargs)
+        # kwargs['tensorboard_log'] = os.path.join(kwargs['tensorboard_log'], 'iter%04d' % 0)
+        if self.mdpSolver == "PG":
+            model = PG(**self.kwargs)
+        else:
+            model = Proj_MDPO_OFF(**self.kwargs)
+        feat_exp = self.get_feature_expectation(model, env, 100)
+        model.save(os.path.join(self.logdir, 'iter%04d' % 0))
+        del model
+        feat_exps.append(feat_exp)
+        feat_exps_bar.append(feat_exp)
+        policy_weights.append(np.array([1.], dtype=np.float32))
+        print('t is', LA.norm(feat_exp - self.expert_feat_exp, 2))
+
+        for i in range(1, num_proj_iters + 1):
+            print('proj iter:', i)
+            # kwargs = copy.deepcopy(self.kwargs)
+            # kwargs['tensorboard_log'] = os.path.join(kwargs['tensorboard_log'], 'iter%04d' % i)
+            if self.mdpSolver == "PG":
+                model = PG(**self.kwargs)
+                model = self.load(os.path.join(self.logdir, 'iter%04d' % (i - 1)), model)
+            else:
+                # if i > 1:
+                #     self.kwargs.update({'learning_starts': 0})
+                model = Proj_MDPO_OFF(**self.kwargs)
+                model = self.load(os.path.join(self.logdir, 'iter%04d' % (i - 1)), model)
+            model.reward_giver.update_reward(self.expert_feat_exp - feat_exps_bar[-1])
+            model.learn(total_timesteps // num_proj_iters, tb_log_name='iter%04d' % i)
+            feat_exp = self.get_feature_expectation(model, env, 100)
+            model.save(os.path.join(self.logdir, 'iter%04d' % i))
+            del model
+            feat_exps.append(feat_exp)
+
+            alpha = 2/(i+1)
+            feat_exp_bar = feat_exps_bar[-1] + alpha * (feat_exp - feat_exps_bar[-1])
+            feat_exps_bar.append(feat_exp_bar)
+
+            policy_weight_pre = np.concatenate([policy_weights[-1], np.array([0.], dtype=np.float32)], axis=0)
+            policy_weight_i = np.zeros((i + 1,), dtype=np.float32)
+            policy_weight_i[-1] = 1
+            assert policy_weight_pre.shape == policy_weight_i.shape
+            policy_weight = policy_weight_pre + alpha * (policy_weight_i - policy_weight_pre)
+            policy_weights.append(policy_weight)
+            diff_results.append(LA.norm(feat_exp_bar - self.expert_feat_exp, 2))
+            print('t is', LA.norm(feat_exp_bar - self.expert_feat_exp, 2))
+
+        print("Diff results is {}".format(diff_results))
+        with open(os.path.join(self.logdir, 'data.pkl'), 'wb') as f:
+            pickle.dump({'feat_exps_bar': feat_exps_bar, 'policy_weights': policy_weights, 'feat_exps': feat_exps}, f)
+
+
+    def learn(self, total_timesteps, num_proj_iters=10, callback=None, log_interval=2000, tb_log_name="Proj_MDPO_OFF",
+              reset_num_timesteps=True):
+        if self.away_step:
+            self.FWAS(total_timesteps, num_proj_iters)
+        else:
+            print("FW algorithm, not Away step")
+            self.FW(total_timesteps, num_proj_iters)
+
+
 
     def save(self, save_path):
         pass
