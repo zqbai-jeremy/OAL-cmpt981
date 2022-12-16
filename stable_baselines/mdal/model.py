@@ -934,34 +934,37 @@ class ProjFWMethod(object):
     def linesearch(self, x, gamma_max, d):
         # h function is distance square between expert and the current expectations
 
-        # c = 0.5
-        # step_size = gamma_max
-        # beta = 0.9
-        # grad = x - self.expert_feat_exp
-        # x_stepped = x + step_size * d
-        # RHS = 0.5*LA.norm(x - self.expert_feat_exp, 2) + c*step_size*np.dot(grad, d)
-        #
-        # while 0.5*LA.norm(x_stepped - self.expert_feat_exp, 2) > RHS:
-        #     step_size = beta * step_size
-        #     x_stepped = x + step_size * d
-        #     RHS = 0.5*LA.norm(x - self.expert_feat_exp, 2) + c*step_size*np.dot(grad, d)
+        c = 0.9
+        step_size = gamma_max
+        beta = 0.9
+        grad = x - self.expert_feat_exp
+        x_stepped = x + step_size * d
+        RHS = 0.5*np.power(LA.norm(x - self.expert_feat_exp, 2), 2) + c*step_size*np.dot(grad, d)
 
+        while 0.5*np.power(LA.norm(x_stepped - self.expert_feat_exp, 2), 2) > RHS:
+            step_size = beta * step_size
+            x_stepped = x + step_size * d
+            RHS = 0.5*np.power(LA.norm(x - self.expert_feat_exp, 2), 2)+ c*step_size*np.dot(grad, d)
+
+        return step_size
+
+        # Exact line search
         #print("d is {}".format(d))
-        if LA.norm(d, 2) == 0:
-            return gamma_max
+        # if LA.norm(d, 2) == 0:
+        #     return gamma_max
+        #
+        # # Not zero norm
+        # print("Not zero norm")
+        # # Let's use exact line search
+        # gamma_best = -np.dot(x - self.expert_feat_exp, d)/LA.norm(d, 2)
+        # gamma = gamma_best
+        #
+        # if gamma_best < 0:
+        #     gamma = 0
+        # elif gamma_best > gamma_max:
+        #     gamma = gamma_max
 
-        # Not zero norm
-        print("Not zero norm")
-        # Let's use exact line search
-        gamma_best = -np.dot(x - self.expert_feat_exp, d)/LA.norm(d, 2)
-        gamma = gamma_best
-
-        if gamma_best < 0:
-            gamma = 0
-        elif gamma_best > gamma_max:
-            gamma = gamma_max
-
-        return gamma
+        #return gamma
 
     def learn(self, total_timesteps, num_proj_iters=10, callback=None, log_interval=2000, tb_log_name="Proj_MDPO_OFF",
               reset_num_timesteps=True):
@@ -1044,7 +1047,7 @@ class ProjFWMethod(object):
             d = 0
             gamma_max = 0
             # Line 6 - 10
-            if np.dot(h_deriv, d_FW) <= np.dot(h_deriv, d_AS):
+            if np.dot(h_deriv, d_FW) < np.dot(h_deriv, d_AS) or i == 1:
                 FW_step = True
                 d = d_FW
                 gamma_max = 1
@@ -1078,8 +1081,10 @@ class ProjFWMethod(object):
                     # Only one element should be here
                     alphas[repr(list(np.array(y_t, dtype=np.float32)))] = 1
                 else:
-                    if y_t not in S[i-1]:
+                    add_new_pt = False
+                    if repr(list(np.array(y_t, dtype=np.float32))) not in alphas:
                         alphas[repr(list(np.array(y_t, dtype=np.float32)))] = gamma_t
+                        add_new_pt = True
                     else: # y_t exists in the set
                         alphas[repr(list(np.array(y_t, dtype=np.float32)))] = (1 - gamma_t) * alphas[repr(list(np.array(y_t, dtype=np.float32)))] + gamma_t
 
@@ -1089,7 +1094,7 @@ class ProjFWMethod(object):
                             alphas[repr(list(np.array(y, dtype=np.float32)))] = (1 - gamma_t) * alphas[repr(list(np.array(y, dtype=np.float32)))]
                     # S[].append(y_t)
                     S[i] = S[i-1]
-                    if y_t not in S[i-1]:
+                    if add_new_pt:
                         S[i].append(y_t)
             # Away step
             else:
