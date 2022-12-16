@@ -876,147 +876,44 @@ class ProjFWMethod(object):
         self.mdpSolver = mdpSolver
         self.expert_dataset = expert_dataset
         # self.normalize_s = np.array([1./2., 1./2., 1./16., 1./4.], dtype=np.float32)
-        assert not is_action_features
+        #assert not is_action_features
         if env.envs[0].spec.id == 'Pendulum-v0':
-            self.normalize_s = np.array([1./2., 1./2., 1./16.], dtype=np.float32)
-            self.normalize_b = np.array([0.5, 0.5, 0.5], dtype=np.float32)
+            assert is_action_features
+            self.normalize_s = np.array([1./2., 1./2., 1./16., 1./4.], dtype=np.float32)
+            self.normalize_b = np.array([0.5, 0.5, 0.5, 0.5], dtype=np.float32)
+            expert_feat_exp = self.expert_dataset.successor_features * 100 # gamma has to be 0.99. successor_features has extra * (1 - gamma)
+            self.expert_feat_exp = expert_feat_exp * self.normalize_s + self.normalize_b
         elif env.envs[0].spec.id == 'MountainCarContinuous-v0':
-            self.normalize_s = np.array([1/1.8, 1/0.14], dtype=np.float32)
-            self.normalize_b = np.array([2./3., 0.5], dtype=np.float32)
-        expert_feat_exp = self.expert_dataset.successor_features * 100 # gamma has to be 0.99. successor_features has extra * (1 - gamma)
-        self.expert_feat_exp = expert_feat_exp[:-1] * self.normalize_s + self.normalize_b
+            self.normalize_s = np.array([1/1.8, 1/0.14, 1./2.], dtype=np.float32)
+            self.normalize_b = np.array([2./3., 0.5, 0.5], dtype=np.float32)
+            assert is_action_features
+            # self.normalize_s = np.array([1/1.2, 1/0.07, 1.], dtype=np.float32)
+            self.expert_feat_exp = piecewise_feature_expectation(
+                expert_dataset.ep_obs, expert_dataset.ep_acs, kwargs['gamma'], self.normalize_s, self.normalize_b)
+            # self.expert_feat_exp = self.expert_feat_exp * 0.5 + 0.5
+        # expert_feat_exp = self.expert_dataset.successor_features * 100 # gamma has to be 0.99. successor_features has extra * (1 - gamma)
+        # self.expert_feat_exp = expert_feat_exp[:-1] * self.normalize_s + self.normalize_b
         self.model = None
         self.alpha = None
         self.logdir = kwargs['tensorboard_log']
         if not os.path.exists(kwargs['tensorboard_log']):
             os.makedirs(kwargs['tensorboard_log'])
 
-    def get_feature_expectation_raw(self, model, env, n_episodes=10):
-        # Retrieve the environment using the RL model
-        if env is None and isinstance(model, BaseRLModel):
-            env = model.get_env()
-
-        assert env is not None, "You must set the env in the model or pass it to the function."
-
-        is_vec_env = False
-        if isinstance(env, VecEnv) and not isinstance(env, _UnvecWrapper):
-            is_vec_env = True
-            if env.num_envs > 1:
-                warnings.warn("You are using multiple envs, only the data from the first one will be recorded.")
-
-        # Sanity check
-        assert (isinstance(env.observation_space, spaces.Box) or
-                isinstance(env.observation_space, spaces.Discrete)), "Observation space type not supported"
-
-        assert (isinstance(env.action_space, spaces.Box) or
-                isinstance(env.action_space, spaces.Discrete)), "Action space type not supported"
-
-        actions = []
-        observations = []
-        rewards = []
-        episode_returns = np.zeros((n_episodes,))
-
-        episode_starts = []
-        gamma = model.gamma
-
-        ep_idx = 0
-        h_step = 0
-        obs = env.reset()
-        episode_obs = []
-        episode_obs.append([])
-        episode_gammas = []
-        episode_gammas.append([])
-        episode_act = []
-        episode_act.append([])
-        episode_starts.append(True)
-        reward_sum = 0.0
-        idx = 0
-        # state and mask for recurrent policies
-        state, mask = None, None
-
-        if is_vec_env:
-            mask = [True for _ in range(env.num_envs)]
-
-        while ep_idx < n_episodes:
-            obs_ = obs[0] if is_vec_env else obs
-            observations.append(obs_)
-            episode_obs[ep_idx].append(obs_)
-
-            if isinstance(model, BaseRLModel):
-                action, state = model.predict(obs, state=state, mask=mask)
-            else:
-                action = model(obs)
-
-            obs, reward, done, _ = env.step(action)
-
-            # Use only first env
-            if is_vec_env:
-                mask = [done[0] for _ in range(env.num_envs)]
-                action = np.array([action[0]])
-                reward = np.array([reward[0]])
-                done = np.array([done[0]])
-
-            actions.append(action)
-            episode_gammas[ep_idx].append(gamma ** h_step)
-            episode_act[ep_idx].append(action)
-            rewards.append(reward)
-            episode_starts.append(done)
-            reward_sum += reward
-            idx += 1
-            h_step += 1
-            if done:
-                if not is_vec_env:
-                    obs = env.reset()
-                    # Reset the state in case of a recurrent policy
-                    state = None
-                episode_returns[ep_idx] = reward_sum
-                reward_sum = 0.0
-                h_step = 0
-                ep_idx += 1
-                if ep_idx < n_episodes:
-                    episode_obs.append([])
-                    episode_act.append([])
-                    episode_gammas.append([])
-
-
-
-        if isinstance(env.observation_space, spaces.Box):
-            observations = np.concatenate(observations).reshape((-1,) + env.observation_space.shape)
-        elif isinstance(env.observation_space, spaces.Discrete):
-            observations = np.array(observations).reshape((-1, 1))
-
-        if isinstance(env.action_space, spaces.Box):
-            actions = np.concatenate(actions).reshape((-1,) + env.action_space.shape)
-        elif isinstance(env.action_space, spaces.Discrete):
-            actions = np.array(actions).reshape((-1, 1))
-
-
-
-        for ep_idx, (ep_obs, ep_act), in enumerate(zip(episode_obs, episode_act)):
-            for idx, (obs, act) in enumerate(zip(reversed(ep_obs), reversed(ep_act))):
-                current_features = np.concatenate((obs, act), axis=0)
-                if idx == 0:
-                    successor_features = (1-gamma) * current_features
-                else:
-                    successor_features = np.add(gamma * successor_features, (1 - gamma) * current_features)
-            if ep_idx == 0:
-                sum_successor_features = successor_features
-            else:
-                sum_successor_features = np.add(sum_successor_features, successor_features)
-
-        successor_features = sum_successor_features / n_episodes
-
-        rewards = np.array(rewards)
-        episode_starts = np.array(episode_starts[:-1])
-
-        assert len(observations) == len(actions)
-
-        return successor_features
+    # def get_feature_expectation(self, model, env, n_episodes=10):
+    #     feat_exp = self.get_feature_expectation_raw(model, env.envs[0].env, n_episodes)
+    #     feat_exp = feat_exp * 100 # gamma has to be 0.99. successor_features has extra * (1 - gamma)
+    #     feat_exp = feat_exp[:-1] * self.normalize_s + self.normalize_b
+    #     return feat_exp
 
     def get_feature_expectation(self, model, env, n_episodes=10):
-        feat_exp = self.get_feature_expectation_raw(model, env.envs[0].env, n_episodes)
-        feat_exp = feat_exp * 100 # gamma has to be 0.99. successor_features has extra * (1 - gamma)
-        feat_exp = feat_exp[:-1] * self.normalize_s + self.normalize_b
+        feat_exp, episode_obs, episode_act, _ = get_feature_expectation_raw(model, env.envs[0].env, n_episodes)
+        if env.envs[0].spec.id == 'Pendulum-v0':
+            feat_exp = feat_exp * 100 # gamma has to be 0.99. successor_features has extra * (1 - gamma)
+            feat_exp = feat_exp * self.normalize_s + self.normalize_b
+        elif env.envs[0].spec.id == 'MountainCarContinuous-v0':
+            feat_exp = piecewise_feature_expectation(
+                np.array(episode_obs), np.array(episode_act), self.kwargs['gamma'], self.normalize_s, self.normalize_b)
+            # feat_exp = feat_exp * 0.5 + 0.5
         return feat_exp
 
     def linear_oracle(self, multiplicative_term, set_K):
@@ -1049,6 +946,12 @@ class ProjFWMethod(object):
         #     x_stepped = x + step_size * d
         #     RHS = 0.5*LA.norm(x - self.expert_feat_exp, 2) + c*step_size*np.dot(grad, d)
 
+        #print("d is {}".format(d))
+        if LA.norm(d, 2) == 0:
+            return gamma_max
+
+        # Not zero norm
+        print("Not zero norm")
         # Let's use exact line search
         gamma_best = -np.dot(x - self.expert_feat_exp, d)/LA.norm(d, 2)
         gamma = gamma_best
@@ -1060,7 +963,7 @@ class ProjFWMethod(object):
 
         return gamma
 
-    def learn(self, total_timesteps, num_proj_iters=10, callback=None, log_interval=2000, tb_log_name="Proj_MDPO_OFF",
+    def learn(self, total_timesteps, num_proj_iters=3, callback=None, log_interval=2000, tb_log_name="Proj_MDPO_OFF",
               reset_num_timesteps=True):
         assert self.expert_dataset is not None, "You must pass an expert dataset to Proj_MDPO_OFF for training"
 
@@ -1089,7 +992,7 @@ class ProjFWMethod(object):
         K.append(feat_exp)
 
         # Vertices set
-        S = [[] for i in range(num_proj_iters)]
+        S = [[] for i in range(num_proj_iters+1)]
         #S.append(np.array(feat_exp, dtype=np.float32))
         S[0].append(feat_exp)
 
@@ -1129,11 +1032,12 @@ class ProjFWMethod(object):
             print("K set is {}".format(K))
             print("y_t is {}".format(list(np.array(y_t, dtype=np.float32))))
             d_FW = y_t - feat_exps_bar[-1]
+            print("d_FW is {}".format(d_FW))
 
             # Line 5 of ASCG algo
             z_idx, z_t = self.linear_oracle(h_deriv, S[i-1])
             d_AS = feat_exps_bar[-1] - z_t
-            #print("z_t is {}".format(z_t))
+            print("d_AS is {}".format(d_AS))
 
             FW_step = False
             # Just initializing them to 0
@@ -1144,9 +1048,11 @@ class ProjFWMethod(object):
                 FW_step = True
                 d = d_FW
                 gamma_max = 1
+                print("Doing FW step {}".format(d_FW))
             else:
                 #FW_step = False
                 d = d_AS
+                print("Doing Away step {}".format(d_AS))
                 # if alphas[repr(list(np.array(z_t, dtype=np.float32)))] == 1:
                 #     gamma_max = 100
                 # else:
@@ -1155,6 +1061,7 @@ class ProjFWMethod(object):
 
             # Line search
             gamma_t = self.linesearch(feat_exps_bar[-1], gamma_max, d)
+            print("gamma is {}".format(gamma_t))
             #print()
             # Update
             feat_exp_bar = feat_exp + gamma_t * d
@@ -1167,7 +1074,7 @@ class ProjFWMethod(object):
                     #new_S = [y_t]
                     S[i] = [y_t]
                     # Empty the dictionary
-                    alphas = {}
+                    alphas.clear()
                     # Only one element should be here
                     alphas[repr(list(np.array(y_t, dtype=np.float32)))] = 1
                 else:
@@ -1178,7 +1085,7 @@ class ProjFWMethod(object):
 
                     # For all other entries not y_t
                     for idx, y in enumerate(S[i-1]):
-                        if y != y_t:
+                        if repr(list(np.array(y, dtype=np.float32))) != repr(list(np.array(y_t, dtype=np.float32))):
                             alphas[repr(list(np.array(y, dtype=np.float32)))] = (1 - gamma_t) * alphas[repr(list(np.array(y, dtype=np.float32)))]
                     # S[].append(y_t)
                     S[i] = S[i-1]
@@ -1208,9 +1115,15 @@ class ProjFWMethod(object):
 
                     alphas[repr(list(np.array(z_t, dtype=np.float32)))] = (1 + gamma_t) * alphas[repr(list(np.array(z_t, dtype=np.float32)))] - gamma_t
                     for idx, y in enumerate(S[i-1]):
-                        if y != z_t:
+                        if repr(list(np.array(y, dtype=np.float32))) != repr(list(np.array(z_t, dtype=np.float32))):
                             alphas[repr(list(np.array(y, dtype=np.float32)))] = (1 + gamma_t) * alphas[repr(list(np.array(y, dtype=np.float32)))]
                     S[i] = S[i-1]
+            print("Set representation S[{}] is {}".format(i, S[i]))
+            print("Alphas is {}".format(alphas))
+            print("Weight coefficients are {}".format(alphas))
+
+            print("Difference compared to expert {}".format(LA.norm(feat_exp_bar - self.expert_feat_exp, 2 )))
+            diff_results.append(LA.norm(feat_exp_bar - self.expert_feat_exp, 2))
 
             # Update the mixture policy
             # policy_weight_pre = np.concatenate([policy_weights[-1], np.array([0.], dtype=np.float32)], axis=0)
@@ -1220,20 +1133,20 @@ class ProjFWMethod(object):
             # policy_weight = policy_weight_pre + gamma_t * (policy_weight_i - policy_weight_pre)
             # policy_weights.append(policy_weight)
 
-            # Empty the policy weight
-            policy_weights = []
-            # Now use the alphas to update the policy weights
-            for i, feat_e in enumerate(feat_exp):
-                if feat_e in S[num_proj_iters - 1]:
-                    # Look up its corresponding alphas
-                    policy_weights[i] = alphas[repr(list(np.array(feat_e, dtype=np.float32)))]
-                else:
-                    policy_weights[i] = 0
+        # Empty the policy weight
+        policy_weights = []
+        print("Alphas is {}".format(alphas))
+        print(feat_exps)
+        # Now use the alphas to update the policy weights
+        for idx, feat_e in enumerate(feat_exps):
+            if repr(list(np.array(feat_e, dtype=np.float32))) in alphas:
+                # Look up its corresponding alphas
+                policy_weights.append(alphas[repr(list(np.array(feat_e, dtype=np.float32)))])
+            else:
+                policy_weights.append(0)
 
-            print("Difference compared to expert {}".format(LA.norm(feat_exp_bar - self.expert_feat_exp, 2 )))
-            diff_results.append(LA.norm(feat_exp_bar - self.expert_feat_exp, 2))
-
-        print(diff_results)
+        print("Policy weight is {}".format(policy_weights))
+        print("Difference compared to experts: {}".format(diff_results))
         print("Expectation over time is {}".format(feat_exps_bar))
         print("gamma list {}".format(gamma_list))
         with open(os.path.join(self.logdir, 'data.pkl'), 'wb') as f:
@@ -1247,16 +1160,41 @@ class ProjFWMethod(object):
         model.load_parameters(params)
         return model
 
-    def test_ep(self, logdir, iter):
-        pass
+    def load_model(self, load_path):
+        model = Proj_MDPO_OFF(**self.kwargs)
+        model = self.load(load_path, model)
+        return model
+
+    def select_mixed_policy(self, logdir, iter, model):
+        with open(os.path.join(logdir, 'data.pkl'), 'rb') as f:
+            data = pickle.load(f)
+            policy_weights = data['policy_weights'][iter]
+        assert policy_weights.shape[0] == iter + 1
+        idx = np.random.choice(np.arange(policy_weights.shape[0]), p=policy_weights)
+        return self.load(os.path.join(logdir, 'iter%04d.zip' % idx), model)
 
     def test(self, logdir, outdir, total_timesteps, num_iters):
+        env = self.kwargs['env']
+        model = Proj_MDPO_OFF(**self.kwargs)
         steps = []
-        for i in range(1, num_iters):
-            steps.append(total_timesteps // num_iters * i)
+        rewards = []
+        for i in tqdm(range(0, num_iters + 1)):
+            steps.append(total_timesteps // num_iters if i > 0 else 0)
             ep_rewards = []
+            model = self.load(os.path.join(logdir, 'iter%04d.zip' % i), model)
             for j in range(100):
-                ep_reward
+                # model = self.select_mixed_policy(logdir, i, model)
+                _, _, _, ep_reward = get_feature_expectation_raw(model, env.envs[0].env, 1)
+                ep_rewards.append(ep_reward[0])
+            rewards.append(np.mean(np.array(ep_rewards)))
+        assert len(steps) == len(rewards)
+
+        with open(os.path.join(outdir, 'test.csv'), 'w') as f:
+            logger = csv.DictWriter(f, fieldnames=('r', 'l'))
+            logger.writeheader()
+            for i in range(len(steps)):
+                ep_info = {"r": round(rewards[i], 6), "l": steps[i]}
+                logger.writerow(ep_info)
 
 
 from stable_baselines.sac import SAC
