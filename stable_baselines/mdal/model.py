@@ -963,7 +963,7 @@ class ProjFWMethod(object):
 
         return gamma
 
-    def learn(self, total_timesteps, num_proj_iters=3, callback=None, log_interval=2000, tb_log_name="Proj_MDPO_OFF",
+    def learn(self, total_timesteps, num_proj_iters=10, callback=None, log_interval=2000, tb_log_name="Proj_MDPO_OFF",
               reset_num_timesteps=True):
         assert self.expert_dataset is not None, "You must pass an expert dataset to Proj_MDPO_OFF for training"
 
